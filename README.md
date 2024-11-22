@@ -48,3 +48,16 @@ graph TD
     %% CSS -- npm module (for manual testing) --> P
     %% P -- sub module --> W
 ```
+
+## Setting up the cert
+
+The certificate is generated and used by the test server to serve the tests over https.
+
+See more details: https://web-platform-tests.org/tools/certs/README.html
+
+The client will need to import this root ca to be able to trust the server.
+
+For Apple devices this can be done by running the following command:
+```bash
+xcrun simctl keychain booted add-root-cert  path/to/shared-web-tests/web-platform-tests/tools/certs/cacert.pem
+```

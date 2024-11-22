@@ -6,7 +6,8 @@
     "dist/"
   ],
   "scripts": {
-    "start": "python3 web-platform-tests/wpt.py serve --config ../build/wpt.config.json",
+    "start": "npm run build && npm run start-server",
+    "start-server": "python3 web-platform-tests/wpt.py serve --config ../build/wpt.config.json",
     "build": "node scripts/build.mjs",
     "tsc": "tsc",
     "lint": "eslint . && npm run tsc && npx prettier . --check",

@@ -15,6 +15,8 @@ To start the example test server run the following command:
 npm start
 ```
 
+We only use the subset of tests that support the web runner: https://wpt-docs.readthedocs.io/en/latest/_running-tests/from-web.html
+
 ## Expected integration
 
 ```mermaid
@@ -48,6 +50,10 @@ graph TD
     %% CSS -- npm module (for manual testing) --> P
     %% P -- sub module --> W
 ```
+
+## Setting up the host file
+
+https://web-platform-tests.org/running-tests/from-local-system.html#hosts-file-setup
 
 ## Setting up the cert
 

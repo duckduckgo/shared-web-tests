@@ -16,6 +16,17 @@ use crate::handler::{Handler};
 use std::process::ExitCode;
 use std::env;
 const EXIT_UNAVAILABLE: u8 = 69;
+use clap::Parser;
+
+
+/// Simple program to greet a person
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Name of the person to greet
+    #[arg(short, long)]
+    port: u16,
+}
 
 /// Get a socket address from the provided host and port
 ///
@@ -59,7 +70,10 @@ fn print_help(cmd: &mut Command) {
 
 fn main() -> ExitCode {
     println!("Hello, world!");
-    if let Err(e) = inner_main() {
+    let args = Args::parse();
+    let port = args.port;
+
+    if let Err(e) = inner_main(port) {
         eprintln!("{}: error: {}", get_program_name(), e);
         //print_help(&mut cmd);
         return ExitCode::from(EXIT_UNAVAILABLE);
@@ -68,11 +82,12 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn inner_main() -> ProgramResult<()> {
+fn inner_main(port: u16) -> ProgramResult<()> {
     //let handler = MarionetteHandler::new(settings);
-    let address = server_address("localhost", 4444).unwrap();
+    let address = server_address("localhost", port).unwrap();
     let allow_hosts = vec![Host::Domain("localhost".to_string())];
-    let allow_origins = vec![Url::parse("http://localhost:4444").unwrap()];
+    let origin = format!("http://localhost:{}", port);
+    let allow_origins = vec![Url::parse(&origin).unwrap()];
     let handler = Handler::new();
     let listening = webdriver::server::start(
         address,

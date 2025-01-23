@@ -35,6 +35,10 @@ use webdriver::response::{
 };
 use regex::Regex;
 use std::fs;
+use std::collections::HashMap;
+use std::sync::OnceLock;
+use std::sync::Mutex;
+use std::str;
 
 
  #[derive(Clone, PartialEq, Eq, Debug)]
@@ -161,31 +165,77 @@ impl WebDriverExtensionCommand for DuckDuckGoExtensionCommand {
 }
 
 
- #[derive(Default)]
- pub(crate) struct Handler {
- }
+#[derive(Default)]
+pub(crate) struct Handler {
+}
 
- impl Handler {
-     pub fn new() -> Self {
-         Handler {}
-     }
- }
+impl Handler {
+    pub fn new() -> Self {
+        Handler {}
+    }
+}
+
+struct PortManager {
+    ports: Mutex<HashMap<&'static str, u16>>,
+}
+
+impl PortManager {
+    fn new() -> Self {
+        PortManager {
+            ports: Mutex::new(HashMap::new()),
+        }
+    }
+
+    fn get_port(&self, udid: &str) -> u16 {
+        let mut ports = self.ports.lock().unwrap();
+        if let Some(&port) = ports.get(udid) {
+            return port;
+        }
+
+        for port in 8557..=65535 {
+            if port_is_available(port) {
+                ports.insert(Box::leak(udid.to_string().into_boxed_str()), port);
+                return port;
+            }
+        }
+        panic!("No available ports found");
+    }
+}
+
+fn port_is_available(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
+static PORT_MANAGER: OnceLock<PortManager> = OnceLock::new();
+
+fn get_port(udid: &str) -> u16 {
+    let port_manager = PORT_MANAGER.get_or_init(|| PortManager::new());
+    port_manager.get_port(udid)
+}
 
  fn runMaestroFlow(udid: &str, flow: &str, env: Vec<String>) -> Result<String, String> {
-    let mut args = vec![format!("--udid={udid}"), "test".to_string()];
+    let port = get_port(udid);
+    let mut args = vec![
+        format!("--udid={udid}"),
+        "test".to_string(),
+        format!("-e AUTOMATION_PORT={port}"),
+        "-e ONBOARDING_COMPLETED=true".to_string(),
+    ];
     env.iter().for_each(|x| args.push(x.to_string()));
     args.push(flow.to_string());
 
-
     let output = Command::new("maestro")
         .args(&args)
+        .env("ONBOARDING_COMPLETED", "true")
+        .env("AUTOMATION_PORT", port.to_string())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .expect("Failed to run flow");
+        .expect("Failed to run onboarding flow");
     if !output.status.success() {
-        eprintln!(
-            "Failed to run flow:\nErr: {}\nOut: {}",
+        info!(
+            "Failed to run {} flow:\nErr: {}\nOut: {}\n\n---\n\n",
+            flow,
             String::from_utf8_lossy(&output.stderr),
             String::from_utf8_lossy(&output.stdout)
         );
@@ -196,28 +246,78 @@ impl WebDriverExtensionCommand for DuckDuckGoExtensionCommand {
     Ok(out)
  }
 
-fn serverRequest(method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
+fn serverRequest(udid: &str, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
+    let port = get_port(udid);
     let query_string: String = params.iter()
         .map(|(key, value)| format!("{}={}", key, value))
         .collect::<Vec<String>>()
         .join("&");
-    let url = format!("http://localhost:8786/{method}?{}", query_string);
-    println!("URL to send: {:?}", url);
+    let url = format!("http://localhost:{}/{method}?{}", port, query_string);
+    info!("URL to send: {:?}", url);
     let client = reqwest::blocking::Client::new();
-    println!("Sending request");
+    info!("Sending request");
     let resp = client.get(url)
         .timeout(std::time::Duration::from_secs(20))
         .send()
         .expect("Request failed")
         .text()
         .expect("Failed to read response text");
-    println!("{:#?}", resp);
+    info!("Response: {:#?}", resp);
     #[derive(Deserialize)]
     struct Response {
         message: String,
     }
     let json: Response = serde_json::from_str(&resp).expect("Failed to parse response");
     return json.message;
+}
+
+fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<String, String> {
+    // Step 1: List existing simulators
+    let list_output = Command::new("xcrun")
+        .args(&["simctl", "list", "devices", "-j"])
+        .output()
+        .expect("Failed to list simulators");
+    let device_name = format!("{target_device} {target_os} (webdriver)");
+
+    let list_stdout = str::from_utf8(&list_output.stdout).expect("Invalid UTF-8 in simulator list");
+    let simulators: serde_json::Value = serde_json::from_str(list_stdout).expect("Failed to parse simulator list");
+
+    // Step 2: Search for a matching simulator
+    if let Some(devices) = simulators.get("devices") {
+        for (runtime, device_list) in devices.as_object().unwrap() {
+            info!("Runtime: {:?}", runtime);
+            if runtime.contains(target_os) {
+                for device in device_list.as_array().unwrap() {
+                    if device["name"] == device_name && device["isAvailable"] == true && device["state"] == "Shutdown" {
+                        info!("Found matching simulator {:?}", device);
+                        return Ok(device["udid"].as_str().unwrap().to_string());
+                    }
+                }
+            }
+        }
+    }
+    info!("No matching simulator found");
+
+    // Step 3: Create a new simulator if no match is found
+    let create_output = Command::new("xcrun")
+        .args(&[
+            "simctl",
+            "create",
+            &device_name,
+            &("com.apple.CoreSimulator.SimDeviceType.".to_owned() + target_device),
+            &("com.apple.CoreSimulator.SimRuntime.".to_owned() + target_os),
+        ])
+        .output()
+        .expect("Failed to create simulator");
+
+    if !create_output.status.success() {
+        return Err("Failed to create a new simulator".to_string());
+    }
+
+    let new_udid = str::from_utf8(&create_output.stdout)
+        .expect("Invalid UTF-8 in create simulator output")
+        .trim();
+    Ok(new_udid.to_string())
 }
  
 
@@ -230,34 +330,21 @@ fn serverRequest(method: &str, params: &std::collections::HashMap<&str, &str>) -
 
         // Replace with your simulator's UDID and app's bundle identifier
         let target_device="iPhone-16";
-        let target_os="iOS-18-1";
+        let target_os="iOS-18-2";
         let app_bundle_id = "com.duckduckgo.mobile.ios";
 
-
-        println!("Message received {:?}", msg);
+        info!("Message received {:?}", msg);
         return match msg.command {
             WebDriverCommand::NewSession(_) => {
-                println!("Starting automation...");
-                let output = Command::new("xcrun")
-                    .args(&["simctl", "create", &format!("{target_device} {target_os} (maestro)"), &("com.apple.CoreSimulator.SimDeviceType.".to_owned() + target_device), &("com.apple.CoreSimulator.SimRuntime.".to_owned() + target_os)])
-                    .output()
-                    .expect("Failed to boot the simulator");
-    
-    
-                if !output.status.success() {
-                    eprintln!(
-                        "Failed to boot simulator: {}",
-                        String::from_utf8_lossy(&output.stderr)
-                    );
-                    return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
-                } else {
-                    println!(
-                        "Simulator booted successfully: {}",
-                        String::from_utf8_lossy(&output.stdout)
-                    );
-                }
-                let simulator_udid = String::from(String::from_utf8(output.stdout).expect("Invalid UDID").trim());
-                println!("Starting automation... {:?}", simulator_udid);
+                info!("Starting automation...");
+                let simulator_udid = match find_or_create_simulator(target_device, target_os) {
+                    Ok(udid) => udid,
+                    Err(e) => {
+                        info!("Failed to find or create simulator: {}", e);
+                        return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+                    }
+                };
+                info!("Simulator UDID: {:?}", simulator_udid);
             
                 // Boot the simulator (if it's not already booted)
                 Command::new("xcrun")
@@ -294,7 +381,7 @@ fn serverRequest(method: &str, params: &std::collections::HashMap<&str, &str>) -
                     .status()
                     .expect("Failed to run flow");
                 */
-                runMaestroFlow(&simulator_udid, flow, vec![]).expect("Failed to run flow");
+                runMaestroFlow(&simulator_udid, flow, vec![]).expect("Failed to run flow after install");
 
                 Command::new("xcrun")
                     .args(&["simctl", "spawn", &simulator_udid, "ps",  "aux"])
@@ -307,36 +394,107 @@ fn serverRequest(method: &str, params: &std::collections::HashMap<&str, &str>) -
                     capabilities: Value::Object(capabilities),
                 }))
             },
+            DeleteSession => {
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                info!("Deleting session {:?}", session_id);
+                // Shutdown the simulator
+                Command::new("xcrun")
+                    .args(&["simctl", "shutdown", session_id])
+                    .status()
+                    .expect("Failed to shutdown the simulator");
+                Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)))
+            },
             Get(params) => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
-                println!("BEEPO {:?} {:?}", params, session_id);
-                /*
-                let params = vec!["-e URL=".to_owned() + params.url.as_str()];
-                runMaestroFlow(session_id, "/Users/jonathanKingston/duckduckgo/iOS/.maestro/shared/set-url.yaml", params).expect("Failed to run flow");
-                */
                 let url = params.url.as_str();
                 let mut params = std::collections::HashMap::new();
                 params.insert("url", url);
-                serverRequest("navigate", &params);
-                return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+                serverRequest(session_id, "navigate", &params);
+                return Ok(WebDriverResponse::Void);
+            },
+            ExecuteScript(params) => {
+                let script = params.script.as_str();
+                info!("Script: {:#?}", params);
+                let script_args = params.args.as_ref().expect("Expected args");
+                // Serialize each argument to a JavaScript-compatible string
+                let mut script_args_str = script_args
+                .iter()
+                .map(|arg| serde_json::to_string(arg).expect("Failed to serialize argument"))
+                .collect::<Vec<_>>();
+
+                // Join the arguments with commas
+                let script_args_str = script_args_str.join(", ");
+
+                let script_wrapper = r#"
+                  (function () {
+                    document.body.style.backgroundColor = "blue";
+                    __SCRIPT__
+                  }(__SCRIPT_ARGS__));
+                "#;
+                // Replace SCRIPT and SCRIPT_ARGS with the actual script and arguments
+                let script = script_wrapper.replace("__SCRIPT__", script).replace("__SCRIPT_ARGS__", script_args_str.as_str());
+                let mut params = std::collections::HashMap::new();
+                // Escape the script
+                let script = urlencoding::encode(&script).to_string();
+                params.insert("script", script.as_str());
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                let response = serverRequest(session_id, "execute", &params);
+                return Ok(WebDriverResponse::Generic(ValueResponse(response.into())));
+            },
+            ExecuteAsyncScript(params) => {
+                let script = params.script.as_str();
+                info!("Script: {:#?}", params);
+                let script_args = params.args.as_ref().expect("Expected args");
+                // Serialize each argument to a JavaScript-compatible string
+                let mut script_args_str = script_args
+                .iter()
+                .map(|arg| serde_json::to_string(arg).expect("Failed to serialize argument"))
+                .collect::<Vec<_>>();
+
+                // Append the string "res" as the last argument
+                script_args_str.push("res".to_string());
+
+                // Join the arguments with commas
+                let script_args_str = script_args_str.join(", ");
+
+                let script_wrapper = r#"
+                let promiseResult = new Promise((res, rej) => {
+                  (function asyncMethod () {
+                    __SCRIPT__
+                  }(__SCRIPT_ARGS__));
+                });
+                return promiseResult;
+                "#;
+                // Replace SCRIPT and SCRIPT_ARGS with the actual script and arguments
+                let script = script_wrapper.replace("__SCRIPT__", script).replace("__SCRIPT_ARGS__", script_args_str.as_str());
+                let mut params = std::collections::HashMap::new();
+                // Escape the script
+                let script = urlencoding::encode(&script).to_string();
+                params.insert("script", script.as_str());
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                let response = serverRequest(session_id, "execute", &params);
+                info!("Script Response: {:#?}", response);
+                let parsed: Value = serde_json::from_str(&response)?;
+                return Ok(WebDriverResponse::Generic(ValueResponse(parsed.into())));
             },
             FindElement(params) => {
                 // Read file
                 let script = include_str!("find-element.js");
                 // URL encode the script
                 let script = urlencoding::encode(&script).to_string();
-                let mut urlParams = std::collections::HashMap::new();
-                urlParams.insert("script", script.as_str());
-                let jsonString = serde_json::to_string(&params).unwrap();
-                let jsonString = urlencoding::encode(&jsonString).to_string();
-                urlParams.insert("args", jsonString.as_str());
-                let element = serverRequest("execute", &urlParams);
+                let mut url_params = std::collections::HashMap::new();
+                url_params.insert("script", script.as_str());
+                let json_string = serde_json::to_string(&params).unwrap();
+                let json_string = urlencoding::encode(&json_string).to_string();
+                url_params.insert("args", json_string.as_str());
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                let element = serverRequest(session_id, "execute", &url_params);
                 let mut res = Map::new();
                 res.insert(webdriver::common::ELEMENT_KEY.to_string(), Value::String(element));
                 return Ok(WebDriverResponse::Generic(ValueResponse(res.into())));
             },
-            ElementClick(elementRef) => {
-                let scriptBody = r#"
+            ElementClick(element_ref) => {
+                let script_body = r#"
                 let element;
                 if (!window.__webdriver_script_results) {
                     throw new Error('No elements found');
@@ -356,18 +514,63 @@ fn serverRequest(method: &str, params: &std::collections::HashMap<&str, &str>) -
                 return "clicked";
                 "#;
                 let script = [
-                    format!("let elementId = '{}';", &elementRef),
-                    scriptBody.to_string(),
+                    format!("let elementId = '{}';", &element_ref),
+                    script_body.to_string(),
                 ].join(" ");
                 let script = urlencoding::encode(&script).to_string();
                 let mut params = std::collections::HashMap::new();
                 params.insert("script", script.as_str());
-                serverRequest("execute", &params);
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                serverRequest(session_id, "execute", &params);
+                // return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+                return Ok(WebDriverResponse::Void);
+            },
+            NewWindow(_) => {
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                let window_handle = serverRequest(session_id, "newWindow", &std::collections::HashMap::new());
+                info!("New window handle: {:#?}", window_handle);
+                #[derive(Deserialize, Debug)]
+                struct ResponseNewWindow {
+                    handle: String,
+                    r#type: String
+                }
+                let response: ResponseNewWindow = serde_json::from_str(&window_handle).expect("Failed to parse window handles");
+                info!("Window handle json: {:#?}", response);
+                return Ok(WebDriverResponse::NewWindow(NewWindowResponse {
+                    handle: response.handle,
+                    typ: response.r#type,
+                }));
+            },
+            CloseWindow => {
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                let window_handle = serverRequest(session_id, "closeWindow", &std::collections::HashMap::new());
+                info!("Close window handle: {:#?}", window_handle);
                 return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+            },
+            SwitchToWindow(params_in) => {
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                let mut params = std::collections::HashMap::new();
+                params.insert("handle", params_in.handle.as_str());
+                serverRequest(session_id, "switchToWindow", &params);
+                return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+            },
+            GetWindowHandle => {
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                let window_handle = serverRequest(session_id, "getWindowHandle", &std::collections::HashMap::new());
+                info!("Window handle: {:#?}", window_handle);
+                return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(window_handle))));
+            },
+            GetWindowHandles => {
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                let window_handles = serverRequest(session_id, "getWindowHandles", &std::collections::HashMap::new());
+                // Parse json string
+                let window_handles: Vec<String> = serde_json::from_str(&window_handles).expect("Failed to parse window handles");
+                info!("Window handles: {:#?}", window_handles);
+                return Ok(WebDriverResponse::Generic(ValueResponse(window_handles.into())));
             },
             GetCurrentUrl => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
-                println!("Session {:?}", session_id);
+                info!("Session {:?}", session_id);
 
                 // let params = vec!["-e URL=javascript:throw new Error('my url:' + window.location.href)".to_owned(), "-e TITLE=jsgeturl".to_owned()];
                 // runMaestroFlow(session_id, "/Users/jonathanKingston/duckduckgo/iOS/.maestro/shared/create_bookmarklette.yaml", params).expect("Failed to run flow");
@@ -378,21 +581,21 @@ fn serverRequest(method: &str, params: &std::collections::HashMap<&str, &str>) -
                 /*
                 let script = "document.write('Hello World')";
                 let url = format!("http://localhost:8786/?script={script}");
-                println!("URL {:?}", url);
+                info!("URL {:?}", url);
                 let resp = reqwest::blocking::get(url).expect("blah").text().expect("blah");
-                println!("{:#?}", resp);
+                info!("{:#?}", resp);
                 #[derive(Deserialize)]
                 struct Response {
                     message: String,
                 }
                 let json: Response = serde_json::from_str(&resp).expect("blah");
-                println!("{:#?}", json.message);
+                info!("{:#?}", json.message);
                 */
                 // let urlString = serverRequest("execute", "script", "window.location.href");
                 // return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(urlString))));
-                let urlString = serverRequest("getUrl", &std::collections::HashMap::new());
-                println!("UrlString response: {:#?}", urlString);
-                return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(urlString))));
+                let url_string = serverRequest(session_id, "getUrl", &std::collections::HashMap::new());
+                info!("UrlString response: {:#?}", url_string);
+                return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(url_string))));
                 /*
                 let urlOutput = runMaestroFlow(session_id, "/Users/jonathanKingston/duckduckgo/iOS/.maestro/shared/get-url.yaml", vec![]).expect_err("Failed to run flow");
                 // Find URL in output:

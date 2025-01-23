@@ -69,12 +69,35 @@ fn print_help(cmd: &mut Command) {
 }*/
 
 fn main() -> ExitCode {
-    println!("Hello, world!");
+    // Configure logger at runtime
+    fern::Dispatch::new()
+        // Perform allocation-free log formatting
+        /*
+        .format(|out, message, record| {
+            out.finish(format_args!(
+                "[{} {} {}] {}",
+                humantime::format_rfc3339(std::time::SystemTime::now()),
+                record.level(),
+                record.target(),
+                message
+            ))
+        })
+            */
+        // Add blanket level filter -
+        .level(log::LevelFilter::Info)
+        // Output to stdout, files, and other Dispatch configurations
+        .chain(std::io::stdout())
+        .chain(fern::log_file("output.log").expect("Unable to open log file"))
+        // Apply globally
+        .apply().expect("Unable to apply logger");
+
+    info!("Hello, world!");
+
     let args = Args::parse();
     let port = args.port;
 
     if let Err(e) = inner_main(port) {
-        eprintln!("{}: error: {}", get_program_name(), e);
+        info!("{}: error: {}", get_program_name(), e);
         //print_help(&mut cmd);
         return ExitCode::from(EXIT_UNAVAILABLE);
     }

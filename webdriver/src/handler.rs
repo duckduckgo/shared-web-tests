@@ -1,7 +1,3 @@
-/* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
-
 use std::process::{Command, Stdio};
 use urlencoding;
 use webdriver::server::{Session, WebDriverHandler};
@@ -113,13 +109,6 @@ impl WebDriverExtensionCommand for VoidWebDriverExtensionCommand {
         panic!("No extensions implemented");
     }
 }
-
-/*
-#[derive(Debug, PartialEq)]
-pub struct WebDriverMessage<U: WebDriverExtensionRoute = VoidWebDriverExtensionRoute> {
-    pub session_id: Option<String>,
-    pub command: WebDriverCommand<U::Command>,
-}*/
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -367,20 +356,7 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
                     .expect("Failed to install the app");
             
                 // Launch the app on the simulator
-                /*
-                Command::new("xcrun")
-                    .args(&["simctl", "launch", &simulator_udid, app_bundle_id, "-isOnboardingCompleted true", "-isUITesting"])
-                    .status()
-                    .expect("Failed to launch the app");
-                */
-
                 let flow = "/Users/jonathanKingston/duckduckgo/iOS/.maestro/shared/setup.yaml";
-                /*
-                Command::new("maestro")
-                    .args(&[&format!("--udid={simulator_udid}"), "test", flow])
-                    .status()
-                    .expect("Failed to run flow");
-                */
                 runMaestroFlow(&simulator_udid, flow, vec![]).expect("Failed to run flow after install");
 
                 Command::new("xcrun")
@@ -427,7 +403,6 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
 
                 let script_wrapper = r#"
                   (function () {
-                    document.body.style.backgroundColor = "blue";
                     __SCRIPT__
                   }(__SCRIPT_ARGS__));
                 "#;
@@ -522,7 +497,6 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
                 params.insert("script", script.as_str());
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 serverRequest(session_id, "execute", &params);
-                // return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
                 return Ok(WebDriverResponse::Void);
             },
             NewWindow(_) => {
@@ -571,104 +545,12 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
             GetCurrentUrl => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 info!("Session {:?}", session_id);
-
-                // let params = vec!["-e URL=javascript:throw new Error('my url:' + window.location.href)".to_owned(), "-e TITLE=jsgeturl".to_owned()];
-                // runMaestroFlow(session_id, "/Users/jonathanKingston/duckduckgo/iOS/.maestro/shared/create_bookmarklette.yaml", params).expect("Failed to run flow");
-                // let params = vec!["-e URL=javascript:throw new Error('my url:' + window.location.href)".to_owned()];
-                // runMaestroFlow(session_id, "/Users/jonathanKingston/duckduckgo/iOS/.maestro/shared/set-url.yaml", params).expect("Failed to run flow");
-
-                // Request to SocketServer on 8786
-                /*
-                let script = "document.write('Hello World')";
-                let url = format!("http://localhost:8786/?script={script}");
-                info!("URL {:?}", url);
-                let resp = reqwest::blocking::get(url).expect("blah").text().expect("blah");
-                info!("{:#?}", resp);
-                #[derive(Deserialize)]
-                struct Response {
-                    message: String,
-                }
-                let json: Response = serde_json::from_str(&resp).expect("blah");
-                info!("{:#?}", json.message);
-                */
-                // let urlString = serverRequest("execute", "script", "window.location.href");
-                // return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(urlString))));
                 let url_string = serverRequest(session_id, "getUrl", &std::collections::HashMap::new());
                 info!("UrlString response: {:#?}", url_string);
                 return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(url_string))));
-                /*
-                let urlOutput = runMaestroFlow(session_id, "/Users/jonathanKingston/duckduckgo/iOS/.maestro/shared/get-url.yaml", vec![]).expect_err("Failed to run flow");
-                // Find URL in output:
-                let pattern = r#"JavaScriptException: Error: URL text:[\\]?["'](.*?)[\\]?["']"#;
-
-                // Compile the regex
-                let re = Regex::new(&pattern).unwrap();
-                let matches: Vec<_> = re.captures_iter(&urlOutput).collect();
-                // Check if there are any matches
-                if let Some(caps) = matches.last() {
-                    let url = &caps[1];
-                    if url == "Search or enter address" {
-                        return Ok(WebDriverResponse::Generic(ValueResponse(Value::String("about:blank".to_string()))));
-                    }
-                    return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(url.to_string()))));
-                }
-                */
-
-                return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));  
             },
             _ => Ok(WebDriverResponse::Generic(ValueResponse(Value::Null))),
         };
-        /*
-         // First handle the status message which doesn't actually require a marionette
-         // connection or message
-         if let Status = msg.command {
-             let (ready, message) = self
-                 .connection
-                 .get_mut()
-                 .map(|ref connection| {
-                     connection
-                         .as_ref()
-                         .map(|_| (false, "Session already started"))
-                         .unwrap_or((true, ""))
-                 })
-                 .unwrap_or((false, "geckodriver internal error"));
-             let mut value = Map::new();
-             value.insert("ready".to_string(), Value::Bool(ready));
-             value.insert("message".to_string(), Value::String(message.into()));
-             return Ok(WebDriverResponse::Generic(ValueResponse(Value::Object(
-                 value,
-             ))));
-         }
- 
-         match self.connection.lock() {
-             Ok(mut connection) => {
-                 if connection.is_none() {
-                     if let NewSession(ref capabilities) = msg.command {
-                         let conn = self.create_connection(msg.session_id.clone(), capabilities)?;
-                         *connection = Some(conn);
-                     } else {
-                         return Err(WebDriverError::new(
-                             ErrorStatus::InvalidSessionId,
-                             "Tried to run command without establishing a connection",
-                         ));
-                     }
-                 }
-                 let conn = connection.as_mut().expect("Missing connection");
-                 conn.send_command(&msg).map_err(|mut err| {
-                     // Shutdown the browser if no session can
-                     // be established due to errors.
-                     if let NewSession(_) = msg.command {
-                         err.delete_session = true;
-                     }
-                     err
-                 })
-             }
-             Err(_) => Err(WebDriverError::new(
-                 ErrorStatus::UnknownError,
-                 "Failed to aquire Marionette connection",
-             )),
-         }
-             */
         Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)))
      }
  

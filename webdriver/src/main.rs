@@ -9,7 +9,7 @@ extern crate serde_json;
 
 mod handler;
 
-use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+use std::net::{SocketAddr, ToSocketAddrs};
 use anyhow::{bail, Result as ProgramResult};
 use url::{Host, Url};
 use crate::handler::{Handler};

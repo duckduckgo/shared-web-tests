@@ -4,10 +4,8 @@ use webdriver::server::{Session, WebDriverHandler};
 use webdriver::httpapi::WebDriverExtensionRoute;
 use webdriver::Parameters;
 use webdriver::command::{WebDriverCommand, WebDriverExtensionCommand, WebDriverMessage};
-use webdriver::error::{ErrorStatus, WebDriverError, WebDriverResult};
-use webdriver::{capabilities::CapabilitiesMatching, server::SessionTeardownKind};
-use serde::de::{self, Deserialize, Deserializer};
-use serde::ser::{Serialize, Serializer};
+use webdriver::error::WebDriverResult;
+use webdriver::server::SessionTeardownKind;
 use serde_json::{Map, Value};
 use webdriver::command::WebDriverCommand::{
     AcceptAlert, AddCookie, CloseWindow, DeleteCookie, DeleteCookies, DeleteSession, DismissAlert,
@@ -29,14 +27,10 @@ use webdriver::response::{
     CloseWindowResponse, CookieResponse, CookiesResponse, ElementRectResponse, NewSessionResponse,
     NewWindowResponse, TimeoutsResponse, ValueResponse, WebDriverResponse, WindowRectResponse,
 };
-use regex::Regex;
-use std::fs;
 use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::sync::Mutex;
 use std::str;
-use std::io::{BufRead, BufReader};
-use std::thread;
 use std::process::Child;
 
 
@@ -87,21 +81,6 @@ pub enum DuckDuckGoContext {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DuckDuckGoContextParameters {
    //pub context: DuckDuckGoContext,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct VoidWebDriverExtensionRoute;
-
-impl WebDriverExtensionRoute for VoidWebDriverExtensionRoute {
-    type Command = VoidWebDriverExtensionCommand;
-
-    fn command(
-        &self,
-        _: &Parameters,
-        _: &Value,
-    ) -> WebDriverResult<WebDriverCommand<VoidWebDriverExtensionCommand>> {
-        panic!("No extensions implemented");
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -205,39 +184,6 @@ fn get_port(udid: &str) -> u16 {
     port_manager.get_port(udid)
 }
 
- fn runMaestroFlow(udid: &str, flow: &str, env: Vec<String>) -> Result<String, String> {
-    let port = get_port(udid);
-    let mut args = vec![
-        format!("--udid={udid}"),
-        "test".to_string(),
-        format!("-e AUTOMATION_PORT={port}"),
-        "-e ONBOARDING_COMPLETED=true".to_string(),
-    ];
-    env.iter().for_each(|x| args.push(x.to_string()));
-    args.push(flow.to_string());
-
-    let output = Command::new("maestro")
-        .args(&args)
-        .env("ONBOARDING_COMPLETED", "true")
-        .env("AUTOMATION_PORT", port.to_string())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .expect("Failed to run onboarding flow");
-    if !output.status.success() {
-        info!(
-            "Failed to run {} flow:\nErr: {}\nOut: {}\n\n---\n\n",
-            flow,
-            String::from_utf8_lossy(&output.stderr),
-            String::from_utf8_lossy(&output.stdout)
-        );
-        let out = String::from(String::from_utf8(output.stdout).expect("Error").trim());
-        return Err(out);
-    }
-    let out = String::from(String::from_utf8(output.stdout).expect("Result"));
-    Ok(out)
- }
-
 fn server_request(udid: &str, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
     let mut child = monitor_simulator_logs(&udid);
     let port = get_port(udid);
@@ -308,10 +254,10 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
     Ok(new_udid.to_string())
 }
 
-const app_bundle_id: &str = "com.duckduckgo.mobile.ios";
+const APP_BUNDLE_ID: &str = "com.duckduckgo.mobile.ios";
 
 fn monitor_simulator_logs(udid: &str) -> Child {
-    let mut child = Command::new("xcrun")
+    let child = Command::new("xcrun")
         .args(&[
             "simctl",
             "spawn",
@@ -321,7 +267,7 @@ fn monitor_simulator_logs(udid: &str) -> Child {
             "--level",
             "debug",
             "--predicate",
-            &format!("processImagePath CONTAINS \"{}\"", app_bundle_id)
+            &format!("processImagePath CONTAINS \"{}\"", APP_BUNDLE_ID)
         ])
         .stdout(Stdio::piped()) // Capture stdout
         .spawn()
@@ -372,7 +318,7 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
         udid,
         "defaults",
         "write",
-        app_bundle_id,
+        APP_BUNDLE_ID,
         key,
         &format!("-{key_type}"),
         value,
@@ -412,11 +358,13 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                     .status()
                     .expect("Failed to open the Simulator app");
                 info!("Opened Simulator app");
-                xcrun_command(&["simctl", "terminate", &simulator_udid, app_bundle_id]);
-                xcrun_command(&["simctl", "uninstall", &simulator_udid, app_bundle_id]);
+                xcrun_command(&["simctl", "terminate", &simulator_udid, APP_BUNDLE_ID]);
+                xcrun_command(&["simctl", "uninstall", &simulator_udid, APP_BUNDLE_ID]);
                 info!("Uninstalled app");
                 // Install the app on the simulator
-                let derived_data_path = "/Users/jonathanKingston/duckduckgo/iOS/DerivedData";
+                let current_dir = std::env::current_dir().expect("Failed to get current directory");
+                let derived_data_path = current_dir.join("../../iOS/DerivedData");
+                let derived_data_path = derived_data_path.to_str().expect("Failed to convert path to string");
                 let app_path = format!("{derived_data_path}/Build/Products/Debug-iphonesimulator/DuckDuckGo.app");
                 info!("App Path: {:?}", app_path);
                 if !xcrun_command(&["simctl", "install", &simulator_udid, app_path.as_str()]).status.success() {
@@ -424,9 +372,6 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 }
                 info!("Installed app");
                 let mut child = monitor_simulator_logs(&simulator_udid);
-                let mut reader = BufReader::new(child.stdout.as_mut().unwrap());
-                let mut line = String::new();
-
                 let logger = xcrun_command(&[
                     "simctl",
                     "spawn",
@@ -436,7 +381,7 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                     "--mode",
                     "level:debug",
                     "-subsystem",
-                    &app_bundle_id
+                    &APP_BUNDLE_ID
                 ]);
                 if !logger.status.success() {
                     panic!("Failed to set log level\n{}", String::from_utf8_lossy(&logger.stderr));
@@ -451,7 +396,7 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                     "--mode",
                     "persist:debug",
                     "-subsystem",
-                    &app_bundle_id
+                    &APP_BUNDLE_ID
                 ]);
                 if !persist_logs.status.success() {
                     panic!("Failed to perist log level\n{}", String::from_utf8_lossy(&persist_logs.stderr));
@@ -462,14 +407,14 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 let port = get_port(&simulator_udid);
                 write_defaults(&simulator_udid, "automationPort", "int", port.to_string().as_str());
 
-                if (!xcrun_command(&[
+                if !xcrun_command(&[
                         "simctl",
                         "launch",
                         &simulator_udid,
-                        app_bundle_id,
+                        APP_BUNDLE_ID,
                         "isUITesting",
                         "true"
-                    ]).status.success()) {
+                    ]).status.success() {
                     panic!("Failed to launch the app");
                 }
 
@@ -481,7 +426,7 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 }
 
                 let _ = child.kill(); // Gracefully kill the child process
-                let mut capabilities = Map::new();
+                let capabilities = Map::new();
                 Ok(WebDriverResponse::NewSession(NewSessionResponse {
                     session_id: simulator_udid.to_string(),
                     capabilities: Value::Object(capabilities),
@@ -507,7 +452,7 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 info!("Script: {:#?}", params);
                 let script_args = params.args.as_ref().expect("Expected args");
                 // Serialize each argument to a JavaScript-compatible string
-                let mut script_args_str = script_args
+                let script_args_str = script_args
                 .iter()
                 .map(|arg| serde_json::to_string(arg).expect("Failed to serialize argument"))
                 .collect::<Vec<_>>();
@@ -665,15 +610,17 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
             },
             _ => Ok(WebDriverResponse::Generic(ValueResponse(Value::Null))),
         };
-        Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)))
      }
  
      fn teardown_session(&mut self, kind: SessionTeardownKind) {
         println!("Tearing down session");
+        info!("Tearing down session");
+        /*
          let wait_for_shutdown = match kind {
              SessionTeardownKind::Deleted => true,
              SessionTeardownKind::NotDeleted => false,
          };
-         // self.close_connection(wait_for_shutdown);
+         self.close_connection(wait_for_shutdown);
+        */
      }
  }

@@ -91,8 +91,6 @@ fn main() -> ExitCode {
         // Apply globally
         .apply().expect("Unable to apply logger");
 
-    info!("Hello, world!");
-
     let args = Args::parse();
     let port = args.port;
 

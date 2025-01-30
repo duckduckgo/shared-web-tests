@@ -35,6 +35,9 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::sync::Mutex;
 use std::str;
+use std::io::{BufRead, BufReader};
+use std::thread;
+use std::process::Child;
 
 
  #[derive(Clone, PartialEq, Eq, Debug)]
@@ -192,7 +195,7 @@ impl PortManager {
 }
 
 fn port_is_available(port: u16) -> bool {
-    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+    std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
 }
 
 static PORT_MANAGER: OnceLock<PortManager> = OnceLock::new();
@@ -235,7 +238,8 @@ fn get_port(udid: &str) -> u16 {
     Ok(out)
  }
 
-fn serverRequest(udid: &str, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
+fn server_request(udid: &str, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
+    let mut child = monitor_simulator_logs(&udid);
     let port = get_port(udid);
     let query_string: String = params.iter()
         .map(|(key, value)| format!("{}={}", key, value))
@@ -257,15 +261,13 @@ fn serverRequest(udid: &str, method: &str, params: &std::collections::HashMap<&s
         message: String,
     }
     let json: Response = serde_json::from_str(&resp).expect("Failed to parse response");
+    let _ = child.kill();
     return json.message;
 }
 
 fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<String, String> {
     // Step 1: List existing simulators
-    let list_output = Command::new("xcrun")
-        .args(&["simctl", "list", "devices", "-j"])
-        .output()
-        .expect("Failed to list simulators");
+    let list_output = xcrun_command(&["simctl", "list", "devices", "-j"]);
     let device_name = format!("{target_device} {target_os} (webdriver)");
 
     let list_stdout = str::from_utf8(&list_output.stdout).expect("Invalid UTF-8 in simulator list");
@@ -288,16 +290,13 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
     info!("No matching simulator found");
 
     // Step 3: Create a new simulator if no match is found
-    let create_output = Command::new("xcrun")
-        .args(&[
-            "simctl",
-            "create",
-            &device_name,
-            &("com.apple.CoreSimulator.SimDeviceType.".to_owned() + target_device),
-            &("com.apple.CoreSimulator.SimRuntime.".to_owned() + target_os),
-        ])
-        .output()
-        .expect("Failed to create simulator");
+    let create_output = xcrun_command(&[
+        "simctl",
+        "create",
+        &device_name,
+        &("com.apple.CoreSimulator.SimDeviceType.".to_owned() + target_device),
+        &("com.apple.CoreSimulator.SimRuntime.".to_owned() + target_os),
+    ]);
 
     if !create_output.status.success() {
         return Err("Failed to create a new simulator".to_string());
@@ -308,7 +307,77 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
         .trim();
     Ok(new_udid.to_string())
 }
- 
+
+const app_bundle_id: &str = "com.duckduckgo.mobile.ios";
+
+fn monitor_simulator_logs(udid: &str) -> Child {
+    let mut child = Command::new("xcrun")
+        .args(&[
+            "simctl",
+            "spawn",
+            udid,
+            "log",
+            "stream",
+            "--level",
+            "debug",
+            "--predicate",
+            &format!("processImagePath CONTAINS \"{}\"", app_bundle_id)
+        ])
+        .stdout(Stdio::piped()) // Capture stdout
+        .spawn()
+        .expect("Failed to start tail process");
+
+    // Spawn a new thread to handle tail -f output
+    /*
+    let stdout = child.stdout.take().expect("Failed to capture stdout");
+    thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            if let Ok(log_line) = line {
+                info!("Simulator: {}", log_line);
+            }
+        }
+    });
+    */
+    return child;
+}
+
+fn xcrun_command(args: &[&str]) -> std::process::Output {
+    let output = Command::new("xcrun")
+        .args(args)
+        .output()
+        .expect("Failed to run xcrun command");
+    if !output.status.success() {
+        info!(
+            "Failed to run xcrun command: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    /*
+    // Convert stdout from bytes to a String
+    let stdout_str = str::from_utf8(&output.stdout).unwrap_or("Failed to parse stdout");
+    let stderr_str = str::from_utf8(&output.stderr).unwrap_or("Failed to parse stderr");
+
+    // Print the captured output
+    println!("stdout: {}", stdout_str);
+    println!("stderr: {}", stderr_str);
+    */
+    return output;
+}
+
+fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
+    xcrun_command(&[
+        "simctl",
+        "spawn",
+        udid,
+        "defaults",
+        "write",
+        app_bundle_id,
+        key,
+        &format!("-{key_type}"),
+        value,
+    ]);
+}
 
  impl WebDriverHandler<DuckDuckGoExtensionRoute> for Handler {
      fn handle_command(
@@ -320,7 +389,6 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
         // Replace with your simulator's UDID and app's bundle identifier
         let target_device="iPhone-16";
         let target_os="iOS-18-2";
-        let app_bundle_id = "com.duckduckgo.mobile.ios";
 
         info!("Message received {:?}", msg);
         return match msg.command {
@@ -336,34 +404,83 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
                 info!("Simulator UDID: {:?}", simulator_udid);
             
                 // Boot the simulator (if it's not already booted)
-                Command::new("xcrun")
-                    .args(&["simctl", "boot", &simulator_udid])
-                    .status()
-                    .expect("Failed to boot the simulator");
+                xcrun_command(&["simctl", "boot", &simulator_udid]);
             
                 // Launch the simulator app
                 Command::new("open")
                     .args(&["-a", "Simulator"])
                     .status()
                     .expect("Failed to open the Simulator app");
-            
+                info!("Opened Simulator app");
+                xcrun_command(&["simctl", "terminate", &simulator_udid, app_bundle_id]);
+                xcrun_command(&["simctl", "uninstall", &simulator_udid, app_bundle_id]);
+                info!("Uninstalled app");
                 // Install the app on the simulator
                 let derived_data_path = "/Users/jonathanKingston/duckduckgo/iOS/DerivedData";
                 let app_path = format!("{derived_data_path}/Build/Products/Debug-iphonesimulator/DuckDuckGo.app");
-                Command::new("xcrun")
-                    .args(&["simctl", "install", &simulator_udid, &app_path])
-                    .status()
-                    .expect("Failed to install the app");
-            
-                // Launch the app on the simulator
-                let flow = "/Users/jonathanKingston/duckduckgo/iOS/.maestro/shared/setup.yaml";
-                runMaestroFlow(&simulator_udid, flow, vec![]).expect("Failed to run flow after install");
+                info!("App Path: {:?}", app_path);
+                if !xcrun_command(&["simctl", "install", &simulator_udid, app_path.as_str()]).status.success() {
+                    panic!("Failed to install the app");
+                }
+                info!("Installed app");
+                let mut child = monitor_simulator_logs(&simulator_udid);
+                let mut reader = BufReader::new(child.stdout.as_mut().unwrap());
+                let mut line = String::new();
 
-                Command::new("xcrun")
-                    .args(&["simctl", "spawn", &simulator_udid, "ps",  "aux"])
-                    .status()
-                    .expect("Failed to launch the app");
+                let logger = xcrun_command(&[
+                    "simctl",
+                    "spawn",
+                    &simulator_udid,
+                    "log",
+                    "config",
+                    "--mode",
+                    "level:debug",
+                    "-subsystem",
+                    &app_bundle_id
+                ]);
+                if !logger.status.success() {
+                    panic!("Failed to set log level\n{}", String::from_utf8_lossy(&logger.stderr));
+                }
 
+                let persist_logs = xcrun_command(&[
+                    "simctl",
+                    "spawn",
+                    &simulator_udid,
+                    "log",
+                    "config",
+                    "--mode",
+                    "persist:debug",
+                    "-subsystem",
+                    &app_bundle_id
+                ]);
+                if !persist_logs.status.success() {
+                    panic!("Failed to perist log level\n{}", String::from_utf8_lossy(&persist_logs.stderr));
+                }
+
+                write_defaults(&simulator_udid, "isUITesting", "bool", "true");
+                write_defaults(&simulator_udid, "isOnboardingCompleted", "string", "true");
+                let port = get_port(&simulator_udid);
+                write_defaults(&simulator_udid, "automationPort", "int", port.to_string().as_str());
+
+                if (!xcrun_command(&[
+                        "simctl",
+                        "launch",
+                        &simulator_udid,
+                        app_bundle_id,
+                        "isUITesting",
+                        "true"
+                    ]).status.success()) {
+                    panic!("Failed to launch the app");
+                }
+
+                // Wait for the server to start
+                loop {
+                    if !port_is_available(port) {
+                        break;
+                    }
+                }
+
+                let _ = child.kill(); // Gracefully kill the child process
                 let mut capabilities = Map::new();
                 Ok(WebDriverResponse::NewSession(NewSessionResponse {
                     session_id: simulator_udid.to_string(),
@@ -374,10 +491,7 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 info!("Deleting session {:?}", session_id);
                 // Shutdown the simulator
-                Command::new("xcrun")
-                    .args(&["simctl", "shutdown", session_id])
-                    .status()
-                    .expect("Failed to shutdown the simulator");
+                xcrun_command(&["simctl", "shutdown", &session_id]);
                 Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)))
             },
             Get(params) => {
@@ -385,7 +499,7 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
                 let url = params.url.as_str();
                 let mut params = std::collections::HashMap::new();
                 params.insert("url", url);
-                serverRequest(session_id, "navigate", &params);
+                server_request(session_id, "navigate", &params);
                 return Ok(WebDriverResponse::Void);
             },
             ExecuteScript(params) => {
@@ -413,7 +527,7 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
                 let script = urlencoding::encode(&script).to_string();
                 params.insert("script", script.as_str());
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
-                let response = serverRequest(session_id, "execute", &params);
+                let response = server_request(session_id, "execute", &params);
                 return Ok(WebDriverResponse::Generic(ValueResponse(response.into())));
             },
             ExecuteAsyncScript(params) => {
@@ -447,7 +561,7 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
                 let script = urlencoding::encode(&script).to_string();
                 params.insert("script", script.as_str());
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
-                let response = serverRequest(session_id, "execute", &params);
+                let response = server_request(session_id, "execute", &params);
                 info!("Script Response: {:#?}", response);
                 let parsed: Value = serde_json::from_str(&response)?;
                 return Ok(WebDriverResponse::Generic(ValueResponse(parsed.into())));
@@ -463,7 +577,7 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
                 let json_string = urlencoding::encode(&json_string).to_string();
                 url_params.insert("args", json_string.as_str());
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
-                let element = serverRequest(session_id, "execute", &url_params);
+                let element = server_request(session_id, "execute", &url_params);
                 let mut res = Map::new();
                 res.insert(webdriver::common::ELEMENT_KEY.to_string(), Value::String(element));
                 return Ok(WebDriverResponse::Generic(ValueResponse(res.into())));
@@ -496,12 +610,12 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
                 let mut params = std::collections::HashMap::new();
                 params.insert("script", script.as_str());
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
-                serverRequest(session_id, "execute", &params);
+                server_request(session_id, "execute", &params);
                 return Ok(WebDriverResponse::Void);
             },
             NewWindow(_) => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
-                let window_handle = serverRequest(session_id, "newWindow", &std::collections::HashMap::new());
+                let window_handle = server_request(session_id, "newWindow", &std::collections::HashMap::new());
                 info!("New window handle: {:#?}", window_handle);
                 #[derive(Deserialize, Debug)]
                 struct ResponseNewWindow {
@@ -517,7 +631,7 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
             },
             CloseWindow => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
-                let window_handle = serverRequest(session_id, "closeWindow", &std::collections::HashMap::new());
+                let window_handle = server_request(session_id, "closeWindow", &std::collections::HashMap::new());
                 info!("Close window handle: {:#?}", window_handle);
                 return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
             },
@@ -525,18 +639,18 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 let mut params = std::collections::HashMap::new();
                 params.insert("handle", params_in.handle.as_str());
-                serverRequest(session_id, "switchToWindow", &params);
+                server_request(session_id, "switchToWindow", &params);
                 return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
             },
             GetWindowHandle => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
-                let window_handle = serverRequest(session_id, "getWindowHandle", &std::collections::HashMap::new());
+                let window_handle = server_request(session_id, "getWindowHandle", &std::collections::HashMap::new());
                 info!("Window handle: {:#?}", window_handle);
                 return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(window_handle))));
             },
             GetWindowHandles => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
-                let window_handles = serverRequest(session_id, "getWindowHandles", &std::collections::HashMap::new());
+                let window_handles = server_request(session_id, "getWindowHandles", &std::collections::HashMap::new());
                 // Parse json string
                 let window_handles: Vec<String> = serde_json::from_str(&window_handles).expect("Failed to parse window handles");
                 info!("Window handles: {:#?}", window_handles);
@@ -545,7 +659,7 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
             GetCurrentUrl => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 info!("Session {:?}", session_id);
-                let url_string = serverRequest(session_id, "getUrl", &std::collections::HashMap::new());
+                let url_string = server_request(session_id, "getUrl", &std::collections::HashMap::new());
                 info!("UrlString response: {:#?}", url_string);
                 return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(url_string))));
             },
@@ -555,6 +669,7 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
      }
  
      fn teardown_session(&mut self, kind: SessionTeardownKind) {
+        println!("Tearing down session");
          let wait_for_shutdown = match kind {
              SessionTeardownKind::Deleted => true,
              SessionTeardownKind::NotDeleted => false,

@@ -76,7 +76,7 @@ xcrun simctl spawn booted log show --last 900m --info --debug --predicate 'subsy
 
 Building the iOS test build:
 ```bash
-bash .maestro/setup_ui_tests.sh --only-build
+source .maestro/common.sh && build_app
 ```
 
 Building the web driver API:

@@ -32,15 +32,13 @@ use std::sync::OnceLock;
 use std::sync::Mutex;
 use std::str;
 use std::process::Child;
+use std::io::{BufReader, BufRead};
+use std::thread;
 
 
  #[derive(Clone, PartialEq, Eq, Debug)]
  pub enum DuckDuckGoExtensionRoute {
-     GetContext,
-     SetContext,
-     InstallAddon,
-     UninstallAddon,
-     TakeFullScreenshot,
+     GetContext
  }
 
  impl WebDriverExtensionRoute for DuckDuckGoExtensionRoute {
@@ -54,17 +52,7 @@ use std::process::Child;
         use self::DuckDuckGoExtensionRoute::*;
 
         let command = match *self {
-            GetContext => DuckDuckGoExtensionCommand::GetContext,
-            SetContext => {
-                DuckDuckGoExtensionCommand::SetContext(serde_json::from_value(body_data.clone())?)
-            }
-            InstallAddon => {
-                DuckDuckGoExtensionCommand::InstallAddon(serde_json::from_value(body_data.clone())?)
-            }
-            UninstallAddon => {
-                DuckDuckGoExtensionCommand::UninstallAddon(serde_json::from_value(body_data.clone())?)
-            }
-            TakeFullScreenshot => DuckDuckGoExtensionCommand::TakeFullScreenshot,
+            GetContext => DuckDuckGoExtensionCommand::GetContext
         };
 
         Ok(WebDriverCommand::Extension(command))
@@ -93,13 +81,6 @@ impl WebDriverExtensionCommand for VoidWebDriverExtensionCommand {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum AddonInstallParameters {
-    //AddonBase64(AddonBase64),
-    AddonPath(AddonPath),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AddonPath {
     pub path: String,
@@ -115,22 +96,14 @@ pub struct AddonUninstallParameters {
 
 #[derive(Clone, Debug)]
 pub enum DuckDuckGoExtensionCommand {
-    GetContext,
-    SetContext(DuckDuckGoContextParameters),
-    InstallAddon(AddonInstallParameters),
-    UninstallAddon(AddonUninstallParameters),
-    TakeFullScreenshot,
+    GetContext
 }
 
 impl WebDriverExtensionCommand for DuckDuckGoExtensionCommand {
     fn parameters_json(&self) -> Option<Value> {
         use self::DuckDuckGoExtensionCommand::*;
         match self {
-            GetContext => None,
-            InstallAddon(x) => Some(serde_json::to_value(x).unwrap()),
-            SetContext(x) => Some(serde_json::to_value(x).unwrap()),
-            UninstallAddon(x) => Some(serde_json::to_value(x).unwrap()),
-            TakeFullScreenshot => None,
+            GetContext => None
         }
     }
 }
@@ -186,6 +159,17 @@ fn get_port(udid: &str) -> u16 {
 
 fn server_request(udid: &str, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
     let mut child = monitor_simulator_logs(&udid);
+    let stdout = child.stdout.take().expect("Failed to capture stdout");
+    thread::spawn(move || {
+        let reader = BufReader::new(stdout);
+        info!("Simulator logs:");
+        for line in reader.lines() {
+            if let Ok(log_line) = line {
+                info!("{}", log_line);
+            }
+        }
+        info!("Simulator logs end");
+    });
     let port = get_port(udid);
     let query_string: String = params.iter()
         .map(|(key, value)| format!("{}={}", key, value))
@@ -194,11 +178,19 @@ fn server_request(udid: &str, method: &str, params: &std::collections::HashMap<&
     let url = format!("http://localhost:{}/{method}?{}", port, query_string);
     info!("URL to send: {:?}", url);
     let client = reqwest::blocking::Client::new();
-    info!("Sending request");
     let resp = client.get(url)
-        .timeout(std::time::Duration::from_secs(20))
+        .timeout(std::time::Duration::from_secs(30)) // TODO Handle variadic timeout set by command
         .send()
-        .expect("Request failed")
+        .map_err(|e| {
+            if e.is_timeout() {
+            info!("Request timed out");
+            // TODO construct serialised error like: Error::new(ErrorKind::TimedOut, "Request timed out")
+            "Request timed out".to_string()
+            } else {
+            "Other error".to_string()
+            }
+        })
+        .expect("Failed to send request")
         .text()
         .expect("Failed to read response text");
     info!("Response: {:#?}", resp);
@@ -257,6 +249,18 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
 const APP_BUNDLE_ID: &str = "com.duckduckgo.mobile.ios";
 
 fn monitor_simulator_logs(udid: &str) -> Child {
+
+/*
+xcrun
+
+simctl
+spawn
+booted
+log
+show
+--last 900m --info --debug --predicate 'subsystem == "com.duckduckgo.mobile.ios"' --style compact
+
+*/
     let child = Command::new("xcrun")
         .args(&[
             "simctl",
@@ -264,10 +268,13 @@ fn monitor_simulator_logs(udid: &str) -> Child {
             udid,
             "log",
             "stream",
-            "--level",
-            "debug",
+            // "--level",
+            // "debug",
+            "--info",
+            "--debug",
             "--predicate",
-            &format!("processImagePath CONTAINS \"{}\"", APP_BUNDLE_ID)
+            &format!("subsystem == \"{}\"", APP_BUNDLE_ID),
+            //&format!("processImagePath CONTAINS \"{}\"", APP_BUNDLE_ID)
         ])
         .stdout(Stdio::piped()) // Capture stdout
         .spawn()
@@ -372,6 +379,17 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 }
                 info!("Installed app");
                 let mut child = monitor_simulator_logs(&simulator_udid);
+                let stdout = child.stdout.take().expect("Failed to capture stdout");
+                thread::spawn(move || {
+                    let reader = BufReader::new(stdout);
+                    info!("Simulator logs:");
+                    for line in reader.lines() {
+                        if let Ok(log_line) = line {
+                            info!("{}", log_line);
+                        }
+                    }
+                    info!("Simulator logs end");
+                });
                 let logger = xcrun_command(&[
                     "simctl",
                     "spawn",
@@ -493,9 +511,19 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
 
                 let script_wrapper = r#"
                 let promiseResult = new Promise((res, rej) => {
-                  (function asyncMethod () {
+                  const timeout = setTimeout(() => {
+                    rej("Script execution timed out");
+                  }, 15000); // 15 secs
+
+                  (async function asyncMethod () {
                     __SCRIPT__
-                  }(__SCRIPT_ARGS__));
+                  }(__SCRIPT_ARGS__)).then(result => {
+                    clearTimeout(timeout);
+                    res(result);
+                  }).catch(error => {
+                    clearTimeout(timeout);
+                    rej(error);
+                  });
                 });
                 return promiseResult;
                 "#;

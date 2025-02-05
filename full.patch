@@ -1,0 +1,159 @@
+Binary files web-platform-tests/tools/__pycache__/localpaths.cpython-312.pyc and build/tools/__pycache__/localpaths.cpython-312.pyc differ
+diff -ruN web-platform-tests/tools/wpt/browser.py build/tools/wpt/browser.py
+--- web-platform-tests/tools/wpt/browser.py	2024-11-20 15:54:00
++++ build/tools/wpt/browser.py	2024-12-20 11:02:11
+@@ -2263,6 +2263,43 @@
+                 return match.group(1)
+         return None
+ 
++class DuckDuckGo(Browser):
++    product = "duckduckgo"
++    requirements = None
++
++    def download(self, dest=None, channel=None, rename=None):
++        raise NotImplementedError
++
++    def install(self, dest=None, channel=None):
++        raise NotImplementedError
++
++    def find_binary(self, venv_path=None, channel=None):
++        return which("duckduckgo")
++
++    def find_webdriver(self, venv_path=None, channel=None):
++        return which("WebDriver")
++
++    def install_webdriver(self, dest=None, channel=None, browser_binary=None):
++        raise NotImplementedError
++
++    def version(self, binary=None, webdriver_binary=None):
++        print("version {binary}", binary)
++        # This is a placeholder for the actual version
++        return "1.0.0"
++        """
++        if not binary:
++            self.logger.warning("No browser binary provided.")
++            return None
++        output = call(binary, "--version")
++        if output:
++            version_string = output.strip()
++            match = re.match(r"Version (.*)", version_string)
++            if match:
++                return match.group(1)
++        print("version {binary}", binary)
++        return None
++        """
++
+ class WebKitTestRunner(Browser):
+     """Interface for WebKitTestRunner.
+     """
+diff -ruN web-platform-tests/tools/wpt/run.py build/tools/wpt/run.py
+--- web-platform-tests/tools/wpt/run.py	2024-11-20 15:54:00
++++ build/tools/wpt/run.py	2024-12-20 11:09:12
+@@ -799,6 +799,17 @@
+     def setup_kwargs(self, kwargs):
+         pass
+ 
++class DuckDuckGoBrowser(BrowserSetup):
++    name = "duckduckgo"
++    browser_cls = browser.DuckDuckGo
++
++    def install(self, channel=None):
++        raise NotImplementedError
++
++    def setup_kwargs(self, kwargs):
++        kwargs["webdriver_binary"] = kwargs["binary"]
++        pass
++
+ class WebKitTestRunner(BrowserSetup):
+     name = "wktr"
+     browser_cls = browser.WebKitTestRunner
+@@ -867,6 +878,7 @@
+ 
+ product_setup = {
+     "android_webview": AndroidWebview,
++    "duckduckgo": DuckDuckGoBrowser,
+     "firefox": Firefox,
+     "firefox_android": FirefoxAndroid,
+     "chrome": Chrome,
+diff -ruN web-platform-tests/tools/wptrunner/wptrunner/browsers/__init__.py build/tools/wptrunner/wptrunner/browsers/__init__.py
+--- web-platform-tests/tools/wptrunner/wptrunner/browsers/__init__.py	2024-11-20 15:54:00
++++ build/tools/wptrunner/wptrunner/browsers/__init__.py	2024-12-20 09:19:15
+@@ -23,6 +23,7 @@
+ """
+ 
+ product_list = ["android_webview",
++"duckduckgo",
+                 "chrome",
+                 "chrome_android",
+                 "chrome_ios",
+diff -ruN web-platform-tests/tools/wptrunner/wptrunner/browsers/duckduckgo.py build/tools/wptrunner/wptrunner/browsers/duckduckgo.py
+--- web-platform-tests/tools/wptrunner/wptrunner/browsers/duckduckgo.py	1970-01-01 01:00:00
++++ build/tools/wptrunner/wptrunner/browsers/duckduckgo.py	2024-12-20 09:18:39
+@@ -0,0 +1,56 @@
++# mypy: allow-untyped-defs
++
++from .base import (WebDriverBrowser,  # noqa: F401
++                   get_timeout_multiplier,  # noqa: F401
++                   require_arg)
++from ..executors import executor_kwargs as base_executor_kwargs
++from ..executors.base import WdspecExecutor  # noqa: F401
++from ..executors.executorwebdriver import (WebDriverTestharnessExecutor,  # noqa: F401
++                                           WebDriverRefTestExecutor,  # noqa: F401
++                                           WebDriverCrashtestExecutor)  # noqa: F401
++
++__wptrunner__ = {
++    "product": "duckduckgo",
++    "check_args": "check_args",
++    "browser": "DuckDuckGoBrowser",
++    "browser_kwargs": "browser_kwargs",
++    "executor_kwargs": "executor_kwargs",
++    "env_options": "env_options",
++    "env_extras": "env_extras",
++    "timeout_multiplier": "get_timeout_multiplier",
++    "executor": {
++        "testharness": "WebDriverTestharnessExecutor",
++        "reftest": "WebDriverRefTestExecutor",
++        "wdspec": "WdspecExecutor",
++        "crashtest": "WebDriverCrashtestExecutor"
++    }
++}
++
++def check_args(**kwargs):
++    require_arg(kwargs, "webdriver_binary")
++
++
++def browser_kwargs(logger, test_type, run_info_data, config, **kwargs):
++    return {"binary": kwargs["binary"],
++            "webdriver_binary": kwargs["webdriver_binary"],
++            "webdriver_args": kwargs.get("webdriver_args")}
++
++
++def executor_kwargs(logger, test_type, test_environment, run_info_data,
++                    **kwargs):
++    executor_kwargs = base_executor_kwargs(test_type, test_environment, run_info_data, **kwargs)
++    executor_kwargs["capabilities"] = {}
++    return executor_kwargs
++
++
++def env_options():
++    return {}
++
++
++def env_extras(**kwargs):
++    return []
++
++
++class DuckDuckGoBrowser(WebDriverBrowser):
++    def make_command(self):
++        return [self.webdriver_binary, "--port", str(self.port)] + self.webdriver_args
+diff -ruN web-platform-tests/tools/wptrunner/wptrunner/executors/executorwebdriver.py build/tools/wptrunner/wptrunner/executors/executorwebdriver.py
+--- web-platform-tests/tools/wptrunner/wptrunner/executors/executorwebdriver.py	2024-11-20 15:54:00
++++ build/tools/wptrunner/wptrunner/executors/executorwebdriver.py	2024-12-20 14:44:03
+@@ -257,6 +257,7 @@
+             self.runner_script = f.read()
+ 
+     def load_runner(self, url_protocol):
++        print("load_runner")
+         if self.runner_handle:
+             self.webdriver.window_handle = self.runner_handle
+         url = urljoin(self.parent.executor.server_url(url_protocol),

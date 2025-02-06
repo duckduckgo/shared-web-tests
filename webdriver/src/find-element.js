@@ -1,9 +1,7 @@
 if (document.readyState != 'complete') {
-    console.log('still loading');
     return new Promise((resolve) => {
         window.addEventListener('load', async () => {
             let scriptResponse = await runScript();
-            console.log('' + scriptResponse);
             resolve(scriptResponse);
         });
     });
@@ -27,11 +25,8 @@ function runScript() {
     return new Promise((resolve, reject) => {
         let attempts = 0;
         function findElement() {
-            console.log('Finding element', ``+attempts, using, value);
             let element = selectElement(using, value);
-            console.log('Finding element', element, ``+attempts, runScript.toString());
             if (element !== null || attempts >= 5) {
-                console.log('Element found', element, attempts);
                 if (element === null) {
                     reject(new Error('Element not found after 5 attempts'));
                     return;
@@ -52,7 +47,6 @@ function runScript() {
             }
             attempts++;
             const delay = Math.min(10 * Math.pow(2, attempts), 16000);
-            console.log('Retrying', attempts, delay);
             setTimeout(findElement, delay);
         }
         findElement();

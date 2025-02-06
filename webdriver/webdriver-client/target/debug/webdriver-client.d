@@ -1,1 +1,0 @@
-/Users/jonathankingston/duckduckgo/shared-web-tests/webdriver/webdriver-client/target/debug/webdriver-client: /Users/jonathankingston/duckduckgo/shared-web-tests/webdriver/webdriver-client/src/main.rs

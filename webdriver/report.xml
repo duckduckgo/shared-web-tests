@@ -1,8 +1,0 @@
-<?xml version='1.0' encoding='UTF-8'?>
-<testsuites>
-  <testsuite name="Test Suite" device="iPhone-16 iOS-18-1 (maestro) - iOS 18.1 - 97ABEAFC-B8CA-4D13-AAD1-434E710C8220" tests="1" failures="1" time="1">
-    <testcase id="get-url4" name="get-url4" classname="get-url4" time="1" status="ERROR">
-      <failure>Unknown error</failure>
-    </testcase>
-  </testsuite>
-</testsuites>

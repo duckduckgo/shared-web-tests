@@ -62,27 +62,9 @@ fn get_program_name() -> String {
     env::args().next().unwrap()
 }
 
-/*
-fn print_help(cmd: &mut Command) {
-    cmd.print_help().ok();
-    println!();
-}*/
-
 fn main() -> ExitCode {
     // Configure logger at runtime
     fern::Dispatch::new()
-        // Perform allocation-free log formatting
-        /*
-        .format(|out, message, record| {
-            out.finish(format_args!(
-                "[{} {} {}] {}",
-                humantime::format_rfc3339(std::time::SystemTime::now()),
-                record.level(),
-                record.target(),
-                message
-            ))
-        })
-            */
         // Add blanket level filter -
         .level(log::LevelFilter::Info)
         // Output to stdout, files, and other Dispatch configurations
@@ -104,7 +86,6 @@ fn main() -> ExitCode {
 }
 
 fn inner_main(port: u16) -> ProgramResult<()> {
-    //let handler = MarionetteHandler::new(settings);
     let address = server_address("localhost", port).unwrap();
     let allow_hosts = vec![Host::Domain("localhost".to_string())];
     let origin = format!("http://localhost:{}", port);

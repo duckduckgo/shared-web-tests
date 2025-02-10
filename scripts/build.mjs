@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, writeFileSync, cpSync, rmSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, writeFileSync, cpSync, rmSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 
@@ -18,11 +18,18 @@ copyFile('web-platform-tests', 'referrer-policy/generic/test-case.sub.js');
   'html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/entry/target.html',
   'html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/incumbent/empty.html',
   'html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/relevant/empty.html',
+
+  'html/browsers/windows/embedded-opener-a-form.html',
+].forEach(file => copyFile('web-platform-tests', file));
+
+[
+  'wpt',
 ].forEach(file => copyFile('web-platform-tests', file));
 
 
 // Copy whole directory
 const copyDirectories = [
+  'docs',
   'tools',
   'common'
 ];
@@ -55,3 +62,7 @@ function copyFile(from, file) {
     }
     copyFileSync(join(from, file), testharnessDest);
 }
+
+// Apply patch file into web-platform-tests
+const patchFile = '../full.patch';
+execSync(`patch -p1 < ${patchFile}`, { cwd: 'build' });

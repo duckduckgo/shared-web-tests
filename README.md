@@ -67,3 +67,25 @@ For Apple devices this can be done by running the following command:
 ```bash
 xcrun simctl keychain booted add-root-cert  path/to/shared-web-tests/web-platform-tests/tools/certs/cacert.pem
 ```
+
+
+Getting logs from the emulator:
+```bash
+xcrun simctl spawn booted log show --last 900m --info --debug --predicate 'subsystem == "com.duckduckgo.mobile.ios"' --style compact
+```
+
+Building the iOS test build:
+```bash
+source .maestro/common.sh && build_app
+```
+
+Building the web driver API:
+```bash
+cd webdriver
+cargo build
+```
+
+Running the suite:
+```bash
+./wpt run  --product duckduckgo --binary ~/duckduckgo/shared-web-tests/webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info duckduckgo
+```

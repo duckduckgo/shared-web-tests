@@ -34,6 +34,8 @@ use std::str;
 use std::process::Child;
 use std::io::{BufReader, BufRead};
 use std::thread;
+use std::env;
+use std::path::PathBuf;
 
 
  #[derive(Clone, PartialEq, Eq, Debug)]
@@ -234,6 +236,18 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
         &device_name,
         &("com.apple.CoreSimulator.SimDeviceType.".to_owned() + target_device),
         &("com.apple.CoreSimulator.SimRuntime.".to_owned() + target_os),
+    ]);
+
+    let mut cargo_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path_to_ca_cert = cargo_path.join("cacert.pem");
+
+    // Install CA Key
+    let install_ca_key = xcrun_command(&[
+        "simctl",
+        "keychain",
+        &device_name,
+        "add-root-cert",
+        path_to_ca_cert.to_str().expect("Failed to convert path to string"),
     ]);
 
     if !create_output.status.success() {

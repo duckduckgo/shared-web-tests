@@ -49,7 +49,6 @@ writeFileSync('build/wpt.config.json', JSON.stringify(config, null, 2));
 const buildManifest = `./web-platform-tests/wpt manifest --tests-root ${currentDir} --no-download -v`;
 execSync(buildManifest, { stdio: 'inherit' });
 
-
 function copyFile(from, file) {
     // Get filename
     const fileParts = file.split('/');

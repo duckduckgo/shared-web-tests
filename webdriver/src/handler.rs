@@ -383,8 +383,12 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 xcrun_command(&["simctl", "uninstall", &simulator_udid, APP_BUNDLE_ID]);
                 info!("Uninstalled app");
                 // Install the app on the simulator
-                let current_dir = std::env::current_dir().expect("Failed to get current directory");
-                let derived_data_path = current_dir.join("../iOS/DerivedData");
+                let derived_data_path = if let Ok(env_path) = std::env::var("DERIVED_DATA_PATH") {
+                    PathBuf::from(env_path)
+                } else {
+                    let current_dir = std::env::current_dir().expect("Failed to get current directory");
+                    current_dir.join("../DerivedData")
+                };
                 let derived_data_path = derived_data_path.to_str().expect("Failed to convert path to string");
                 let app_path = format!("{derived_data_path}/Build/Products/Debug-iphonesimulator/DuckDuckGo.app");
                 info!("App Path: {:?}", app_path);

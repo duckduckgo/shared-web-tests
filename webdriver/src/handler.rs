@@ -353,15 +353,22 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
          msg: WebDriverMessage<DuckDuckGoExtensionRoute>,
      ) -> WebDriverResult<WebDriverResponse> {
 
-        // Replace with your simulator's UDID and app's bundle identifier
-        let target_device="iPhone-16";
-        let target_os="iOS-18-2";
+        let target_device = if let Ok(env_path) = std::env::var("TARGET_DEVICE") {
+            env_path
+        } else {
+            "iPhone-16".to_string()
+        };
+        let target_os = if let Ok(env_path) = std::env::var("TARGET_OS") {
+            env_path
+        } else {
+            "iOS-18-2".to_string()
+        };
 
         info!("Message received {:?}", msg);
         return match msg.command {
             WebDriverCommand::NewSession(_) => {
                 info!("Starting automation...");
-                let simulator_udid = match find_or_create_simulator(target_device, target_os) {
+                let simulator_udid = match find_or_create_simulator(&target_device, &target_os) {
                     Ok(udid) => udid,
                     Err(e) => {
                         info!("Failed to find or create simulator: {}", e);

@@ -227,7 +227,7 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
             }
         }
     }
-    info!("No matching simulator found");
+    info!("No matching simulator found, creating a new one...");
 
     // Step 3: Create a new simulator if no match is found
     let create_output = xcrun_command(&[
@@ -367,7 +367,7 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
         info!("Message received {:?}", msg);
         return match msg.command {
             WebDriverCommand::NewSession(_) => {
-                info!("Starting automation...");
+                info!("Starting automation... {:?} {:?}", target_device, target_os);
                 let simulator_udid = match find_or_create_simulator(&target_device, &target_os) {
                     Ok(udid) => udid,
                     Err(e) => {

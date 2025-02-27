@@ -631,7 +631,12 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 let window_handle = server_request(session_id, "closeWindow", &std::collections::HashMap::new());
                 info!("Close window handle: {:#?}", window_handle);
-                return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+
+                let window_handles = server_request(session_id, "getWindowHandles", &std::collections::HashMap::new());
+                // Parse json string
+                let window_handles: Vec<String> = serde_json::from_str(&window_handles).expect("Failed to parse window handles");
+                info!("Window handles: {:#?}", window_handles);
+                return Ok(WebDriverResponse::Generic(ValueResponse(window_handles.into())));
             },
             SwitchToWindow(params_in) => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");

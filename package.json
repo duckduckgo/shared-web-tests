@@ -15,7 +15,7 @@
     "lint": "eslint . && npm run tsc && npx prettier . --check",
     "lint-fix": "eslint . --fix && npx prettier . --write",
     "install-hosts": "./build/wpt make-hosts-file | tee -a /etc/hosts",
-    "test": "./build/wpt run  --product duckduckgo --binary webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info duckduckgo"
+    "test": "./build/wpt run --product duckduckgo --binary webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info --log-mach-verbose duckduckgo"
   },
   "type": "module",
   "author": "DuckDuckGo",

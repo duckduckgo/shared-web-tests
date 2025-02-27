@@ -91,6 +91,7 @@ fn inner_main(port: u16) -> ProgramResult<()> {
     let origin = format!("http://localhost:{}", port);
     let allow_origins = vec![Url::parse(&origin).unwrap()];
     let handler = Handler::new();
+    info!("Starting server on {}", address);
     let listening = webdriver::server::start(
         address,
         allow_hosts,

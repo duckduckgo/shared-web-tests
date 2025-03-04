@@ -34,6 +34,8 @@ use std::str;
 use std::process::Child;
 use std::io::{BufReader, BufRead};
 use std::thread;
+use std::env;
+use std::path::PathBuf;
 
 
  #[derive(Clone, PartialEq, Eq, Debug)]
@@ -225,7 +227,7 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
             }
         }
     }
-    info!("No matching simulator found");
+    info!("No matching simulator found, creating a new one...");
 
     // Step 3: Create a new simulator if no match is found
     let create_output = xcrun_command(&[
@@ -234,6 +236,18 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
         &device_name,
         &("com.apple.CoreSimulator.SimDeviceType.".to_owned() + target_device),
         &("com.apple.CoreSimulator.SimRuntime.".to_owned() + target_os),
+    ]);
+
+    let mut cargo_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let path_to_ca_cert = cargo_path.join("cacert.pem");
+
+    // Install CA Key
+    let install_ca_key = xcrun_command(&[
+        "simctl",
+        "keychain",
+        &device_name,
+        "add-root-cert",
+        path_to_ca_cert.to_str().expect("Failed to convert path to string"),
     ]);
 
     if !create_output.status.success() {
@@ -339,15 +353,22 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
          msg: WebDriverMessage<DuckDuckGoExtensionRoute>,
      ) -> WebDriverResult<WebDriverResponse> {
 
-        // Replace with your simulator's UDID and app's bundle identifier
-        let target_device="iPhone-16";
-        let target_os="iOS-18-2";
+        let target_device = if let Ok(env_path) = std::env::var("TARGET_DEVICE") {
+            env_path
+        } else {
+            "iPhone-16".to_string()
+        };
+        let target_os = if let Ok(env_path) = std::env::var("TARGET_OS") {
+            env_path
+        } else {
+            "iOS-18-2".to_string()
+        };
 
         info!("Message received {:?}", msg);
         return match msg.command {
             WebDriverCommand::NewSession(_) => {
-                info!("Starting automation...");
-                let simulator_udid = match find_or_create_simulator(target_device, target_os) {
+                info!("Starting automation... {:?} {:?}", target_device, target_os);
+                let simulator_udid = match find_or_create_simulator(&target_device, &target_os) {
                     Ok(udid) => udid,
                     Err(e) => {
                         info!("Failed to find or create simulator: {}", e);
@@ -369,8 +390,12 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 xcrun_command(&["simctl", "uninstall", &simulator_udid, APP_BUNDLE_ID]);
                 info!("Uninstalled app");
                 // Install the app on the simulator
-                let current_dir = std::env::current_dir().expect("Failed to get current directory");
-                let derived_data_path = current_dir.join("../../iOS/DerivedData");
+                let derived_data_path = if let Ok(env_path) = std::env::var("DERIVED_DATA_PATH") {
+                    PathBuf::from(env_path)
+                } else {
+                    let current_dir = std::env::current_dir().expect("Failed to get current directory");
+                    current_dir.join("../DerivedData")
+                };
                 let derived_data_path = derived_data_path.to_str().expect("Failed to convert path to string");
                 let app_path = format!("{derived_data_path}/Build/Products/Debug-iphonesimulator/DuckDuckGo.app");
                 info!("App Path: {:?}", app_path);
@@ -606,7 +631,12 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 let window_handle = server_request(session_id, "closeWindow", &std::collections::HashMap::new());
                 info!("Close window handle: {:#?}", window_handle);
-                return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+
+                let window_handles = server_request(session_id, "getWindowHandles", &std::collections::HashMap::new());
+                // Parse json string
+                let window_handles: Vec<String> = serde_json::from_str(&window_handles).expect("Failed to parse window handles");
+                info!("Window handles: {:#?}", window_handles);
+                return Ok(WebDriverResponse::Generic(ValueResponse(window_handles.into())));
             },
             SwitchToWindow(params_in) => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");

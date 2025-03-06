@@ -161,17 +161,6 @@ fn get_port(udid: &str) -> u16 {
 
 fn server_request(udid: &str, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
     let mut child = monitor_simulator_logs(&udid);
-    let stdout = child.stdout.take().expect("Failed to capture stdout");
-    thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        info!("Simulator logs:");
-        for line in reader.lines() {
-            if let Ok(log_line) = line {
-                info!("{}", log_line);
-            }
-        }
-        info!("Simulator logs end");
-    });
     let port = get_port(udid);
     let query_string: String = params.iter()
         .map(|(key, value)| format!("{}={}", key, value))
@@ -261,51 +250,46 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
 }
 
 const APP_BUNDLE_ID: &str = "com.duckduckgo.mobile.ios";
-
+fn log_level() -> String {
+    match log::max_level() {
+        log::LevelFilter::Error => "error",
+        log::LevelFilter::Warn => "warn",
+        log::LevelFilter::Info => "info",
+        log::LevelFilter::Debug => "debug",
+        log::LevelFilter::Trace => "trace",
+        log::LevelFilter::Off => "off",
+    }.to_string()
+}
 fn monitor_simulator_logs(udid: &str) -> Child {
-
-/*
-xcrun
-
-simctl
-spawn
-booted
-log
-show
---last 900m --info --debug --predicate 'subsystem == "com.duckduckgo.mobile.ios"' --style compact
-
-*/
-    let child = Command::new("xcrun")
+    let mut child = Command::new("xcrun")
         .args(&[
             "simctl",
             "spawn",
             udid,
             "log",
             "stream",
-            // "--level",
-            // "debug",
-            "--info",
-            "--debug",
+            "--level",
+            &log_level(),
             "--predicate",
             &format!("subsystem == \"{}\"", APP_BUNDLE_ID),
-            //&format!("processImagePath CONTAINS \"{}\"", APP_BUNDLE_ID)
         ])
         .stdout(Stdio::piped()) // Capture stdout
         .spawn()
         .expect("Failed to start tail process");
 
     // Spawn a new thread to handle tail -f output
-    /*
     let stdout = child.stdout.take().expect("Failed to capture stdout");
     thread::spawn(move || {
+        info!("Simulator logs:");
         let reader = BufReader::new(stdout);
         for line in reader.lines() {
             if let Ok(log_line) = line {
                 info!("Simulator: {}", log_line);
             }
         }
+        info!("Simulator logs end");
     });
-    */
+
     return child;
 }
 
@@ -320,15 +304,6 @@ fn xcrun_command(args: &[&str]) -> std::process::Output {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    /*
-    // Convert stdout from bytes to a String
-    let stdout_str = str::from_utf8(&output.stdout).unwrap_or("Failed to parse stdout");
-    let stderr_str = str::from_utf8(&output.stderr).unwrap_or("Failed to parse stderr");
-
-    // Print the captured output
-    println!("stdout: {}", stdout_str);
-    println!("stderr: {}", stderr_str);
-    */
     return output;
 }
 
@@ -404,17 +379,6 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 }
                 info!("Installed app");
                 let mut child = monitor_simulator_logs(&simulator_udid);
-                let stdout = child.stdout.take().expect("Failed to capture stdout");
-                thread::spawn(move || {
-                    let reader = BufReader::new(stdout);
-                    info!("Simulator logs:");
-                    for line in reader.lines() {
-                        if let Ok(log_line) = line {
-                            info!("{}", log_line);
-                        }
-                    }
-                    info!("Simulator logs end");
-                });
                 let logger = xcrun_command(&[
                     "simctl",
                     "spawn",
@@ -422,7 +386,7 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                     "log",
                     "config",
                     "--mode",
-                    "level:debug",
+                    &format!("level:{}", log_level()),
                     "-subsystem",
                     &APP_BUNDLE_ID
                 ]);
@@ -437,7 +401,7 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                     "log",
                     "config",
                     "--mode",
-                    "persist:debug",
+                    &format!("persist:{}", log_level()),
                     "-subsystem",
                     &APP_BUNDLE_ID
                 ]);
@@ -673,12 +637,5 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
      fn teardown_session(&mut self, kind: SessionTeardownKind) {
         println!("Tearing down session");
         info!("Tearing down session");
-        /*
-         let wait_for_shutdown = match kind {
-             SessionTeardownKind::Deleted => true,
-             SessionTeardownKind::NotDeleted => false,
-         };
-         self.close_connection(wait_for_shutdown);
-        */
      }
  }

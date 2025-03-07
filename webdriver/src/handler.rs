@@ -492,26 +492,31 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 .map(|arg| serde_json::to_string(arg).expect("Failed to serialize argument"))
                 .collect::<Vec<_>>();
 
-                // Append the string "res" as the last argument
-                script_args_str.push("res".to_string());
+                // Append the string "innerResolve" as the last argument
+                script_args_str.push("innerResolve".to_string());
 
                 // Join the arguments with commas
                 let script_args_str = script_args_str.join(", ");
 
                 let script_wrapper = r#"
-                let promiseResult = new Promise((res, rej) => {
+                let promiseResult = new Promise((outerResolve, outerReject) => {
                   const timeout = setTimeout(() => {
-                    rej("Script execution timed out");
+                    outerReject({reason: "Script execution timed out"});
                   }, 15000); // 15 secs
 
-                  (async function asyncMethod () {
-                    __SCRIPT__
-                  }(__SCRIPT_ARGS__)).then(result => {
+                  // Create an inner promise to wrap the harness callback behavior.
+                  let innerPromise = new Promise((innerResolve, innerReject) => {
+                      (async function asyncMethod () {
+                      __SCRIPT__
+                      }(__SCRIPT_ARGS__));
+                  });
+
+                  innerPromise.then(result => {
                     clearTimeout(timeout);
-                    res(result);
+                    outerResolve(result);
                   }).catch(error => {
                     clearTimeout(timeout);
-                    rej(error);
+                    outerReject({error: error, reason: "Async script failed"});
                   });
                 });
                 return promiseResult;

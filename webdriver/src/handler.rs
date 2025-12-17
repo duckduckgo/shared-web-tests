@@ -996,7 +996,14 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 info!("UrlString response: {:#?}", url_string);
                 return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(url_string))));
             },
-            _ => Ok(WebDriverResponse::Generic(ValueResponse(Value::Null))),
+            ReleaseActions | PerformActions(_) => {
+                info!("Actions command - no-op, returning void");
+                return Ok(WebDriverResponse::Void);
+            },
+            _ => {
+                info!("Unhandled command: {:?}", msg.command);
+                Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)))
+            },
         };
      }
  

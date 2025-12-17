@@ -36,6 +36,7 @@ use std::io::{BufReader, BufRead};
 use std::thread;
 use std::env;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 
  #[derive(Clone, PartialEq, Eq, Debug)]
@@ -260,6 +261,200 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
     Ok(new_udid.to_string())
 }
 
+// Platform configuration
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Platform {
+    IOS,
+    MacOS,
+}
+
+impl Platform {
+    fn from_env() -> Self {
+        match std::env::var("TARGET_PLATFORM").as_deref() {
+            Ok("macos") | Ok("macOS") | Ok("mac") => Platform::MacOS,
+            _ => Platform::IOS, // Default to iOS for backward compatibility
+        }
+    }
+
+    fn bundle_id(&self) -> &'static str {
+        match self {
+            Platform::IOS => "com.duckduckgo.mobile.ios",
+            Platform::MacOS => "com.duckduckgo.macos.browser",
+        }
+    }
+}
+
+const APP_BUNDLE_ID_IOS: &str = "com.duckduckgo.mobile.ios";
+const APP_BUNDLE_ID_MACOS: &str = "com.duckduckgo.macos.browser";
+const APP_BUNDLE_ID_MACOS_DEBUG: &str = "com.duckduckgo.macos.browser.debug";
+
+// Get bundle ID from app's Info.plist
+fn get_macos_bundle_id(app_path: &str) -> String {
+    let info_plist = format!("{}/Contents/Info.plist", app_path);
+    let output = Command::new("defaults")
+        .args(&["read", &info_plist, "CFBundleIdentifier"])
+        .output();
+    
+    match output {
+        Ok(out) if out.status.success() => {
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        },
+        _ => {
+            // Fallback: check if path contains DEBUG
+            if app_path.contains("DEBUG") || app_path.contains("Debug") {
+                APP_BUNDLE_ID_MACOS_DEBUG.to_string()
+            } else {
+                APP_BUNDLE_ID_MACOS.to_string()
+            }
+        }
+    }
+}
+
+// macOS-specific functions
+fn write_macos_defaults(bundle_id: &str, key: &str, key_type: &str, value: &str) {
+    let output = Command::new("defaults")
+        .args(&[
+            "write",
+            bundle_id,
+            key,
+            &format!("-{}", key_type),
+            value,
+        ])
+        .output()
+        .expect("Failed to write defaults");
+    if !output.status.success() {
+        info!(
+            "Failed to write defaults: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+fn launch_macos_app(app_path: &str, port: u16) -> Result<(Child, String), String> {
+    info!("Launching macOS app at: {}", app_path);
+
+    // Get the bundle ID from the app
+    let bundle_id = get_macos_bundle_id(app_path);
+    info!("Detected bundle ID: {}", bundle_id);
+
+    // First, quit any running instance
+    let _ = Command::new("osascript")
+        .args(&["-e", "tell application \"DuckDuckGo\" to quit"])
+        .output();
+
+    // Wait a bit for the app to quit
+    std::thread::sleep(std::time::Duration::from_millis(500));
+
+    // Write the automation port to defaults using correct bundle ID
+    write_macos_defaults(&bundle_id, "automationPort", "int", &port.to_string());
+    write_macos_defaults(&bundle_id, "isUITesting", "bool", "true");
+    write_macos_defaults(&bundle_id, "isOnboardingCompleted", "string", "true");
+
+    // Launch the app
+    let child = Command::new("open")
+        .args(&["-a", app_path, "--args", "-isUITesting", "true"])
+        .spawn()
+        .map_err(|e| format!("Failed to launch app: {}", e))?;
+
+    Ok((child, bundle_id))
+}
+
+fn monitor_macos_logs(bundle_id: &str) -> Child {
+    let child = Command::new("log")
+        .args(&[
+            "stream",
+            "--info",
+            "--debug",
+            "--predicate",
+            &format!("subsystem == \"{}\"", bundle_id),
+        ])
+        .stdout(Stdio::piped())
+        .spawn()
+        .expect("Failed to start log stream");
+    child
+}
+
+fn quit_macos_app() {
+    let _ = Command::new("osascript")
+        .args(&["-e", "tell application \"DuckDuckGo\" to quit"])
+        .output();
+}
+
+fn server_request_for_platform(session_id: &str, platform: &Platform, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
+    match platform {
+        Platform::IOS => {
+            // iOS uses simulator logs
+            let mut child = monitor_simulator_logs(&session_id);
+            let stdout = child.stdout.take().expect("Failed to capture stdout");
+            thread::spawn(move || {
+                let reader = BufReader::new(stdout);
+                info!("Simulator logs:");
+                for line in reader.lines() {
+                    if let Ok(log_line) = line {
+                        info!("{}", log_line);
+                    }
+                }
+                info!("Simulator logs end");
+            });
+            let port = get_port(session_id);
+            let result = make_server_request(port, method, params);
+            let _ = child.kill();
+            result
+        },
+        Platform::MacOS => {
+            // macOS uses direct log stream
+            let mut child = monitor_macos_logs(APP_BUNDLE_ID_MACOS);
+            let stdout = child.stdout.take().expect("Failed to capture stdout");
+            thread::spawn(move || {
+                let reader = BufReader::new(stdout);
+                info!("macOS app logs:");
+                for line in reader.lines() {
+                    if let Ok(log_line) = line {
+                        info!("{}", log_line);
+                    }
+                }
+                info!("macOS app logs end");
+            });
+            let port = get_port(session_id);
+            let result = make_server_request(port, method, params);
+            let _ = child.kill();
+            result
+        }
+    }
+}
+
+fn make_server_request(port: u16, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
+    let query_string: String = params.iter()
+        .map(|(key, value)| format!("{}={}", key, value))
+        .collect::<Vec<String>>()
+        .join("&");
+    let url = format!("http://localhost:{}/{method}?{}", port, query_string);
+    info!("URL to send: {:?}", url);
+    let client = reqwest::blocking::Client::new();
+    let resp = client.get(url)
+        .timeout(std::time::Duration::from_secs(30))
+        .send()
+        .map_err(|e| {
+            if e.is_timeout() {
+                info!("Request timed out");
+                "Request timed out".to_string()
+            } else {
+                format!("Request error: {}", e)
+            }
+        })
+        .expect("Failed to send request")
+        .text()
+        .expect("Failed to read response text");
+    info!("Response: {:#?}", resp);
+    #[derive(Deserialize)]
+    struct Response {
+        message: String,
+    }
+    let json: Response = serde_json::from_str(&resp).expect("Failed to parse response");
+    return json.message;
+}
+
+// iOS-specific constants (kept for backward compatibility)
 const APP_BUNDLE_ID: &str = "com.duckduckgo.mobile.ios";
 
 fn monitor_simulator_logs(udid: &str) -> Child {
@@ -353,6 +548,9 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
          msg: WebDriverMessage<DuckDuckGoExtensionRoute>,
      ) -> WebDriverResult<WebDriverResponse> {
 
+        let platform = Platform::from_env();
+        info!("Target platform: {:?}", platform);
+
         let target_device = if let Ok(env_path) = std::env::var("TARGET_DEVICE") {
             env_path
         } else {
@@ -367,119 +565,203 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
         info!("Message received {:?}", msg);
         return match msg.command {
             WebDriverCommand::NewSession(_) => {
-                info!("Starting automation... {:?} {:?}", target_device, target_os);
-                let simulator_udid = match find_or_create_simulator(&target_device, &target_os) {
-                    Ok(udid) => udid,
-                    Err(e) => {
-                        info!("Failed to find or create simulator: {}", e);
-                        return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
-                    }
-                };
-                info!("Simulator UDID: {:?}", simulator_udid);
-            
-                // Boot the simulator (if it's not already booted)
-                xcrun_command(&["simctl", "boot", &simulator_udid]);
-            
-                // Launch the simulator app
-                Command::new("open")
-                    .args(&["-a", "Simulator"])
-                    .status()
-                    .expect("Failed to open the Simulator app");
-                info!("Opened Simulator app");
-                xcrun_command(&["simctl", "terminate", &simulator_udid, APP_BUNDLE_ID]);
-                xcrun_command(&["simctl", "uninstall", &simulator_udid, APP_BUNDLE_ID]);
-                info!("Uninstalled app");
-                // Install the app on the simulator
-                let derived_data_path = if let Ok(env_path) = std::env::var("DERIVED_DATA_PATH") {
-                    PathBuf::from(env_path)
-                } else {
-                    let current_dir = std::env::current_dir().expect("Failed to get current directory");
-                    current_dir.join("../DerivedData")
-                };
-                let derived_data_path = derived_data_path.to_str().expect("Failed to convert path to string");
-                let app_path = format!("{derived_data_path}/Build/Products/Debug-iphonesimulator/DuckDuckGo.app");
-                info!("App Path: {:?}", app_path);
-                if !xcrun_command(&["simctl", "install", &simulator_udid, app_path.as_str()]).status.success() {
-                    panic!("Failed to install the app");
-                }
-                info!("Installed app");
-                let mut child = monitor_simulator_logs(&simulator_udid);
-                let stdout = child.stdout.take().expect("Failed to capture stdout");
-                thread::spawn(move || {
-                    let reader = BufReader::new(stdout);
-                    info!("Simulator logs:");
-                    for line in reader.lines() {
-                        if let Ok(log_line) = line {
-                            info!("{}", log_line);
+                match platform {
+                    Platform::MacOS => {
+                        info!("Starting macOS automation...");
+                        
+                        // Generate a unique session ID for macOS
+                        let session_id = Uuid::new_v4().to_string();
+                        
+                        // Get app path from environment or use default
+                        let app_path = if let Ok(env_path) = std::env::var("MACOS_APP_PATH") {
+                            env_path
+                        } else {
+                            let derived_data_path = if let Ok(env_path) = std::env::var("DERIVED_DATA_PATH") {
+                                PathBuf::from(env_path)
+                            } else {
+                                let current_dir = std::env::current_dir().expect("Failed to get current directory");
+                                // apple-browsers DerivedData is in the ddg-workflow monorepo
+                                current_dir.join("../ddg-workflow/apple-browsers/DerivedData")
+                            };
+                            format!("{}/Build/Products/Debug/DuckDuckGo.app", derived_data_path.to_str().expect("Failed to convert path to string"))
+                        };
+                        
+                        info!("macOS App Path: {:?}", app_path);
+                        
+                        // Get port for this session
+                        let port = get_port(&session_id);
+                        
+                        // Launch the macOS app
+                        let bundle_id = match launch_macos_app(&app_path, port) {
+                            Ok((_, bundle_id)) => {
+                                info!("Launched macOS app");
+                                bundle_id
+                            },
+                            Err(e) => {
+                                info!("Failed to launch macOS app: {}", e);
+                                return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+                            }
+                        };
+                        
+                        // Start monitoring logs with correct bundle ID
+                        let mut child = monitor_macos_logs(&bundle_id);
+                        let stdout = child.stdout.take().expect("Failed to capture stdout");
+                        thread::spawn(move || {
+                            let reader = BufReader::new(stdout);
+                            info!("macOS app logs:");
+                            for line in reader.lines() {
+                                if let Ok(log_line) = line {
+                                    info!("{}", log_line);
+                                }
+                            }
+                            info!("macOS app logs end");
+                        });
+                        
+                        // Wait for the server to start
+                        info!("Waiting for automation server on port {}...", port);
+                        let mut attempts = 0;
+                        loop {
+                            if !port_is_available(port) {
+                                info!("Server started on port {}", port);
+                                break;
+                            }
+                            attempts += 1;
+                            if attempts > 100 { // 10 seconds timeout
+                                panic!("Timeout waiting for automation server to start");
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
                         }
+                        
+                        let _ = child.kill();
+                        let capabilities = Map::new();
+                        Ok(WebDriverResponse::NewSession(NewSessionResponse {
+                            session_id: session_id,
+                            capabilities: Value::Object(capabilities),
+                        }))
+                    },
+                    Platform::IOS => {
+                        info!("Starting iOS automation... {:?} {:?}", target_device, target_os);
+                        let simulator_udid = match find_or_create_simulator(&target_device, &target_os) {
+                            Ok(udid) => udid,
+                            Err(e) => {
+                                info!("Failed to find or create simulator: {}", e);
+                                return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+                            }
+                        };
+                        info!("Simulator UDID: {:?}", simulator_udid);
+                    
+                        // Boot the simulator (if it's not already booted)
+                        xcrun_command(&["simctl", "boot", &simulator_udid]);
+                    
+                        // Launch the simulator app
+                        Command::new("open")
+                            .args(&["-a", "Simulator"])
+                            .status()
+                            .expect("Failed to open the Simulator app");
+                        info!("Opened Simulator app");
+                        xcrun_command(&["simctl", "terminate", &simulator_udid, APP_BUNDLE_ID]);
+                        xcrun_command(&["simctl", "uninstall", &simulator_udid, APP_BUNDLE_ID]);
+                        info!("Uninstalled app");
+                        // Install the app on the simulator
+                        let derived_data_path = if let Ok(env_path) = std::env::var("DERIVED_DATA_PATH") {
+                            PathBuf::from(env_path)
+                        } else {
+                            let current_dir = std::env::current_dir().expect("Failed to get current directory");
+                            current_dir.join("../DerivedData")
+                        };
+                        let derived_data_path = derived_data_path.to_str().expect("Failed to convert path to string");
+                        let app_path = format!("{derived_data_path}/Build/Products/Debug-iphonesimulator/DuckDuckGo.app");
+                        info!("App Path: {:?}", app_path);
+                        if !xcrun_command(&["simctl", "install", &simulator_udid, app_path.as_str()]).status.success() {
+                            panic!("Failed to install the app");
+                        }
+                        info!("Installed app");
+                        let mut child = monitor_simulator_logs(&simulator_udid);
+                        let stdout = child.stdout.take().expect("Failed to capture stdout");
+                        thread::spawn(move || {
+                            let reader = BufReader::new(stdout);
+                            info!("Simulator logs:");
+                            for line in reader.lines() {
+                                if let Ok(log_line) = line {
+                                    info!("{}", log_line);
+                                }
+                            }
+                            info!("Simulator logs end");
+                        });
+                        let logger = xcrun_command(&[
+                            "simctl",
+                            "spawn",
+                            &simulator_udid,
+                            "log",
+                            "config",
+                            "--mode",
+                            "level:debug",
+                            "-subsystem",
+                            &APP_BUNDLE_ID
+                        ]);
+                        if !logger.status.success() {
+                            panic!("Failed to set log level\n{}", String::from_utf8_lossy(&logger.stderr));
+                        }
+
+                        let persist_logs = xcrun_command(&[
+                            "simctl",
+                            "spawn",
+                            &simulator_udid,
+                            "log",
+                            "config",
+                            "--mode",
+                            "persist:debug",
+                            "-subsystem",
+                            &APP_BUNDLE_ID
+                        ]);
+                        if !persist_logs.status.success() {
+                            panic!("Failed to perist log level\n{}", String::from_utf8_lossy(&persist_logs.stderr));
+                        }
+
+                        write_defaults(&simulator_udid, "isUITesting", "bool", "true");
+                        write_defaults(&simulator_udid, "isOnboardingCompleted", "string", "true");
+                        let port = get_port(&simulator_udid);
+                        write_defaults(&simulator_udid, "automationPort", "int", port.to_string().as_str());
+
+                        if !xcrun_command(&[
+                                "simctl",
+                                "launch",
+                                &simulator_udid,
+                                APP_BUNDLE_ID,
+                                "isUITesting",
+                                "true"
+                            ]).status.success() {
+                            panic!("Failed to launch the app");
+                        }
+
+                        // Wait for the server to start
+                        loop {
+                            if !port_is_available(port) {
+                                break;
+                            }
+                        }
+
+                        let _ = child.kill(); // Gracefully kill the child process
+                        let capabilities = Map::new();
+                        Ok(WebDriverResponse::NewSession(NewSessionResponse {
+                            session_id: simulator_udid.to_string(),
+                            capabilities: Value::Object(capabilities),
+                        }))
                     }
-                    info!("Simulator logs end");
-                });
-                let logger = xcrun_command(&[
-                    "simctl",
-                    "spawn",
-                    &simulator_udid,
-                    "log",
-                    "config",
-                    "--mode",
-                    "level:debug",
-                    "-subsystem",
-                    &APP_BUNDLE_ID
-                ]);
-                if !logger.status.success() {
-                    panic!("Failed to set log level\n{}", String::from_utf8_lossy(&logger.stderr));
                 }
-
-                let persist_logs = xcrun_command(&[
-                    "simctl",
-                    "spawn",
-                    &simulator_udid,
-                    "log",
-                    "config",
-                    "--mode",
-                    "persist:debug",
-                    "-subsystem",
-                    &APP_BUNDLE_ID
-                ]);
-                if !persist_logs.status.success() {
-                    panic!("Failed to perist log level\n{}", String::from_utf8_lossy(&persist_logs.stderr));
-                }
-
-                write_defaults(&simulator_udid, "isUITesting", "bool", "true");
-                write_defaults(&simulator_udid, "isOnboardingCompleted", "string", "true");
-                let port = get_port(&simulator_udid);
-                write_defaults(&simulator_udid, "automationPort", "int", port.to_string().as_str());
-
-                if !xcrun_command(&[
-                        "simctl",
-                        "launch",
-                        &simulator_udid,
-                        APP_BUNDLE_ID,
-                        "isUITesting",
-                        "true"
-                    ]).status.success() {
-                    panic!("Failed to launch the app");
-                }
-
-                // Wait for the server to start
-                loop {
-                    if !port_is_available(port) {
-                        break;
-                    }
-                }
-
-                let _ = child.kill(); // Gracefully kill the child process
-                let capabilities = Map::new();
-                Ok(WebDriverResponse::NewSession(NewSessionResponse {
-                    session_id: simulator_udid.to_string(),
-                    capabilities: Value::Object(capabilities),
-                }))
             },
             DeleteSession => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 info!("Deleting session {:?}", session_id);
-                // Shutdown the simulator
-                xcrun_command(&["simctl", "shutdown", &session_id]);
+                match platform {
+                    Platform::MacOS => {
+                        quit_macos_app();
+                    },
+                    Platform::IOS => {
+                        // Shutdown the simulator
+                        xcrun_command(&["simctl", "shutdown", &session_id]);
+                    }
+                }
                 Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)))
             },
             Get(params) => {
@@ -503,10 +785,33 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 // Join the arguments with commas
                 let script_args_str = script_args_str.join(", ");
 
+                // Wrapper that handles DOM element returns by converting them to element references
+                // Uses the standard WebDriver element key for compatibility
                 let script_wrapper = r#"
-                  (function () {
-                    __SCRIPT__
-                  }(__SCRIPT_ARGS__));
+                  return (function () {
+                    const ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf";
+                    const result = (function () {
+                      __SCRIPT__
+                    }(__SCRIPT_ARGS__));
+                    
+                    // Check if result is a DOM element
+                    if (result instanceof Element || result instanceof Document) {
+                      if (!window.__webdriver_script_results) {
+                        window.__webdriver_script_results = new Map();
+                      }
+                      let uuid;
+                      if (window.__webdriver_script_results.has(result)) {
+                        uuid = window.__webdriver_script_results.get(result);
+                      } else {
+                        uuid = window.crypto.randomUUID();
+                        window.__webdriver_script_results.set(result, uuid);
+                      }
+                      const elementRef = {};
+                      elementRef[ELEMENT_KEY] = uuid;
+                      return elementRef;
+                    }
+                    return result;
+                  }());
                 "#;
                 // Replace SCRIPT and SCRIPT_ARGS with the actual script and arguments
                 let script = script_wrapper.replace("__SCRIPT__", script).replace("__SCRIPT_ARGS__", script_args_str.as_str());
@@ -516,7 +821,28 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 params.insert("script", script.as_str());
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 let response = server_request(session_id, "execute", &params);
-                return Ok(WebDriverResponse::Generic(ValueResponse(response.into())));
+                
+                // Parse response and check for element references
+                let parsed: Value = serde_json::from_str(&response)?;
+                if let Some(message) = parsed.get("message") {
+                    // Try to parse message as JSON to check for element reference
+                    if let Some(msg_str) = message.as_str() {
+                        if let Ok(msg_value) = serde_json::from_str::<Value>(msg_str) {
+                            // Check for element reference with standard WebDriver key
+                            if let Some(element_id) = msg_value.get(webdriver::common::ELEMENT_KEY).and_then(|v| v.as_str()) {
+                                // Return as WebElement reference
+                                let mut res = Map::new();
+                                res.insert(webdriver::common::ELEMENT_KEY.to_string(), Value::String(element_id.to_string()));
+                                return Ok(WebDriverResponse::Generic(ValueResponse(res.into())));
+                            }
+                            // Return parsed JSON object
+                            return Ok(WebDriverResponse::Generic(ValueResponse(msg_value)));
+                        }
+                    }
+                    // Return the message value directly
+                    return Ok(WebDriverResponse::Generic(ValueResponse(message.clone())));
+                }
+                return Ok(WebDriverResponse::Generic(ValueResponse(parsed.into())));
             },
             ExecuteAsyncScript(params) => {
                 let script = params.script.as_str();
@@ -575,9 +901,13 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 let json_string = urlencoding::encode(&json_string).to_string();
                 url_params.insert("args", json_string.as_str());
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
-                let element = server_request(session_id, "execute", &url_params);
+                let response = server_request(session_id, "execute", &url_params);
+                // Parse the response to extract the element UUID from the "message" field
+                let parsed: Value = serde_json::from_str(&response)?;
+                let element_id = parsed["message"].as_str().unwrap_or("").to_string();
+                info!("FindElement response: {:?}, element_id: {:?}", response, element_id);
                 let mut res = Map::new();
-                res.insert(webdriver::common::ELEMENT_KEY.to_string(), Value::String(element));
+                res.insert(webdriver::common::ELEMENT_KEY.to_string(), Value::String(element_id));
                 return Ok(WebDriverResponse::Generic(ValueResponse(res.into())));
             },
             ElementClick(element_ref) => {

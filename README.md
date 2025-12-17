@@ -85,7 +85,39 @@ cd webdriver
 cargo build
 ```
 
-Running the suite:
+Running the suite (iOS):
 ```bash
-./wpt run  --product duckduckgo --binary ~/duckduckgo/shared-web-tests/webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info duckduckgo
+./build/wpt run --product duckduckgo --binary webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info duckduckgo
 ```
+
+## macOS Testing
+
+### Finding your built app
+
+Find existing DuckDuckGo.app builds in Xcode's DerivedData:
+```bash
+find ~/Library/Developer/Xcode/DerivedData -name "DuckDuckGo.app" -path "*/Debug/*" -type d 2>/dev/null | grep -v iphonesimulator
+```
+
+### Running the suite (macOS)
+
+```bash
+cd shared-web-tests
+source build/_venv3/bin/activate
+
+# Set the path to your built macOS app
+export MACOS_APP_PATH="/path/to/DuckDuckGo.app"
+
+# Run with macOS target platform
+TARGET_PLATFORM=macos ./build/wpt run --product duckduckgo --binary webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info duckduckgo
+```
+
+### macOS App Setup Requirements
+
+The macOS app must include the automation server. Ensure these files are added to the Xcode project's macOS target:
+- `macOS/DuckDuckGo/LaunchOptionsHandler.swift`
+- `macOS/DuckDuckGo/Automation/AutomationServer.swift`
+
+The `AppDelegate.swift` must call `startAutomationServerIfNeeded()` in `applicationDidFinishLaunching`.
+
+The automation server reads `automationPort` from UserDefaults. The webdriver automatically detects the bundle ID from the app's Info.plist (handles both release `com.duckduckgo.macos.browser` and debug `com.duckduckgo.macos.browser.debug` builds).

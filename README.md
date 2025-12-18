@@ -74,21 +74,78 @@ Getting logs from the emulator:
 xcrun simctl spawn booted log show --last 900m --info --debug --predicate 'subsystem == "com.duckduckgo.mobile.ios"' --style compact
 ```
 
-Building the iOS test build:
+## iOS WebDriver Testing
+
+### Quick Start
 
 ```bash
-source .maestro/common.sh && build_app
+# Terminal 1: Build the iOS app (first time or after code changes)
+npm run ios:build
+
+# Terminal 1: Start the WebDriver server
+npm run ios:driver
+
+# Terminal 2: Run the example test
+npm run ios:example
+
+# Or run the full test suite
+npm run ios:test
 ```
 
-Building the web driver API:
+### Options
+
+```bash
+# Build from a different apple-browsers location
+./scripts/ios-webdriver.sh build /path/to/apple-browsers
+
+# Keep the browser open after test completes
+./scripts/ios-webdriver.sh example --keep
+
+# Navigate to a specific URL
+./scripts/ios-webdriver.sh example https://duckduckgo.com
+
+# Combine options
+./scripts/ios-webdriver.sh example https://duckduckgo.com --keep
+```
+
+### Environment Variables
+
+- `APPLE_BROWSERS_DIR` - Path to apple-browsers repo (default: `../apple-browsers`)
+- `DERIVED_DATA_PATH` - Path to DerivedData containing the built app
+
+### Manual Steps (if needed)
+
+Building the iOS app:
+
+```bash
+cd ../apple-browsers
+source .maestro/common.sh && build_app 1
+```
+
+The app will be built to `apple-browsers/DerivedData/Build/Products/Debug-iphonesimulator/DuckDuckGo.app`
+
+Building the WebDriver:
 
 ```bash
 cd webdriver
 cargo build
 ```
 
-Running the suite:
+Starting the driver manually:
 
 ```bash
-./wpt run  --product duckduckgo --binary ~/duckduckgo/shared-web-tests/webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info duckduckgo
+cd webdriver
+DERIVED_DATA_PATH="../../apple-browsers/DerivedData" ./target/debug/ddgdriver --port 4444
+```
+
+Running the example test manually:
+
+```bash
+DERIVED_DATA_PATH="../apple-browsers/DerivedData" npm run webdriver:example
+```
+
+Running the full suite:
+
+```bash
+./wpt run --product duckduckgo --binary webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info duckduckgo
 ```

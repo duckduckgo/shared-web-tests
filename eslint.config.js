@@ -38,14 +38,6 @@ export default tseslint.config(
         },
     },
     {
-        files: ['webdriver/**/*.mjs'],
-        languageOptions: {
-            globals: {
-                ...globals.node,
-            },
-        },
-    },
-    {
         files: ['webdriver/src/**/*.js'],
         languageOptions: {
             globals: {

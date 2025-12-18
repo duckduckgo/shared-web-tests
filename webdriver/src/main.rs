@@ -12,28 +12,11 @@ mod handler;
 use std::net::{SocketAddr, ToSocketAddrs};
 use anyhow::{bail, Result as ProgramResult};
 use url::{Host, Url};
-use crate::handler::{Backend, Handler};
+use crate::handler::Handler;
 use std::process::ExitCode;
 use std::env;
 const EXIT_UNAVAILABLE: u8 = 69;
 use clap::Parser;
-
-#[derive(clap::ValueEnum, Clone, Debug)]
-enum BackendArg {
-    /// iOS Simulator + in-app automation server (default)
-    Ios,
-    /// Puppeteer (Node) for simple navigation smoke-testing
-    Puppeteer,
-}
-
-impl From<BackendArg> for Backend {
-    fn from(value: BackendArg) -> Self {
-        match value {
-            BackendArg::Ios => Backend::Ios,
-            BackendArg::Puppeteer => Backend::Puppeteer,
-        }
-    }
-}
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -42,10 +25,6 @@ struct Args {
     /// Name of the person to greet
     #[arg(short, long)]
     port: u16,
-
-    /// Which backend to use for driving navigation/script execution
-    #[arg(long, value_enum, default_value_t = BackendArg::Ios)]
-    backend: BackendArg,
 }
 
 /// Get a socket address from the provided host and port
@@ -95,9 +74,8 @@ fn main() -> ExitCode {
 
     let args = Args::parse();
     let port = args.port;
-    let backend: Backend = args.backend.into();
 
-    if let Err(e) = inner_main(port, backend) {
+    if let Err(e) = inner_main(port) {
         info!("{}: error: {}", get_program_name(), e);
         //print_help(&mut cmd);
         return ExitCode::from(EXIT_UNAVAILABLE);
@@ -106,12 +84,12 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn inner_main(port: u16, backend: Backend) -> ProgramResult<()> {
+fn inner_main(port: u16) -> ProgramResult<()> {
     let address = server_address("localhost", port).unwrap();
     let allow_hosts = vec![Host::Domain("localhost".to_string())];
     let origin = format!("http://localhost:{}", port);
     let allow_origins = vec![Url::parse(&origin).unwrap()];
-    let handler = Handler::new(backend);
+    let handler = Handler::new();
     info!("Starting server on {}", address);
     let listening = webdriver::server::start(
         address,

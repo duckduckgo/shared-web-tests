@@ -37,6 +37,11 @@ use std::thread;
 use std::env;
 use std::path::PathBuf;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Backend {
+    Ios,
+    Puppeteer,
+}
 
  #[derive(Clone, PartialEq, Eq, Debug)]
  pub enum DuckDuckGoExtensionRoute {
@@ -111,13 +116,13 @@ impl WebDriverExtensionCommand for DuckDuckGoExtensionCommand {
 }
 
 
-#[derive(Default)]
 pub(crate) struct Handler {
+    backend: Backend,
 }
 
 impl Handler {
-    pub fn new() -> Self {
-        Handler {}
+    pub fn new(backend: Backend) -> Self {
+        Handler { backend }
     }
 }
 
@@ -321,12 +326,74 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
     ]);
 }
 
+fn generate_session_id() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("ddgdriver-{}", nanos)
+}
+
+fn puppeteer_navigate(url: &str) -> Result<String, String> {
+    let script_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("puppeteer_navigate.mjs");
+    if !script_path.exists() {
+        return Err(format!(
+            "Missing puppeteer script at {}",
+            script_path.to_string_lossy()
+        ));
+    }
+
+    let output = Command::new("node")
+        .arg(script_path)
+        .arg(url)
+        .output()
+        .map_err(|e| format!("Failed to spawn node: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "Puppeteer navigate failed (exit={}):\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
  impl WebDriverHandler<DuckDuckGoExtensionRoute> for Handler {
      fn handle_command(
          &mut self,
          _: &Option<Session>,
          msg: WebDriverMessage<DuckDuckGoExtensionRoute>,
      ) -> WebDriverResult<WebDriverResponse> {
+
+        if self.backend == Backend::Puppeteer {
+            info!("Puppeteer backend active");
+            return match msg.command {
+                WebDriverCommand::NewSession(_) => {
+                    let session_id = generate_session_id();
+                    let capabilities = Map::new();
+                    Ok(WebDriverResponse::NewSession(NewSessionResponse {
+                        session_id,
+                        capabilities: Value::Object(capabilities),
+                    }))
+                }
+                DeleteSession => Ok(WebDriverResponse::Generic(ValueResponse(Value::Null))),
+                Get(params) => {
+                    let url = params.url.as_str();
+                    match puppeteer_navigate(url) {
+                        Ok(result) => info!("Puppeteer navigation result: {}", result),
+                        Err(e) => {
+                            info!("Puppeteer navigation error: {}", e);
+                            // Keep behaviour consistent with other unimplemented bits (best-effort).
+                            // The caller will fail later if this is critical.
+                        }
+                    }
+                    Ok(WebDriverResponse::Void)
+                }
+                _ => Ok(WebDriverResponse::Generic(ValueResponse(Value::Null))),
+            };
+        }
 
         let target_device = if let Ok(env_path) = std::env::var("TARGET_DEVICE") {
             env_path

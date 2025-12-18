@@ -5,10 +5,7 @@ import globals from 'globals';
 // @ts-check
 export default tseslint.config(
     {
-        ignores: [
-            'web-platform-tests',
-            'build/**/*',
-        ],
+        ignores: ['web-platform-tests', 'build/**/*'],
     },
     ...ddgConfig,
     ...tseslint.configs.recommended,
@@ -37,6 +34,24 @@ export default tseslint.config(
         languageOptions: {
             globals: {
                 ...globals.node,
+            },
+        },
+    },
+    {
+        files: ['webdriver/**/*.mjs'],
+        languageOptions: {
+            globals: {
+                ...globals.node,
+            },
+        },
+    },
+    {
+        files: ['webdriver/src/**/*.js'],
+        languageOptions: {
+            globals: {
+                ...globals.browser,
+                using: 'readonly',
+                value: 'readonly',
             },
         },
     },

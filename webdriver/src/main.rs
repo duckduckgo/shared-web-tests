@@ -9,6 +9,12 @@ extern crate serde_json;
 
 mod handler;
 
+// Platform-specific modules
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+mod cdp;
+
 use std::net::{SocketAddr, ToSocketAddrs};
 use anyhow::{bail, Result as ProgramResult};
 use url::{Host, Url};

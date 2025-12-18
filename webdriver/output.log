@@ -1,0 +1,18 @@
+Starting server on 127.0.0.1:4444
+Listening on 127.0.0.1:4444
+Server::run_incoming;
+listening with custom incoming
+Message received WebDriverMessage { session_id: None, command: NewSession(NewSessionParameters { capabilities: SpecNewSessionParameters { alwaysMatch: {}, firstMatch: [{}] } }) }
+Starting Windows browser automation...
+Launching Windows browser at: DuckDuckGo.exe
+Debug port: 9222
+Browser launched with PID: 39192
+Waiting for port 9222 to become available...
+Failed to create session: Timeout waiting for port 9222 after 30s
+Message received WebDriverMessage { session_id: None, command: NewSession(NewSessionParameters { capabilities: SpecNewSessionParameters { alwaysMatch: {}, firstMatch: [{}] } }) }
+Starting Windows browser automation...
+Launching Windows browser at: DuckDuckGo.exe
+Debug port: 9222
+Browser launched with PID: 20496
+Waiting for port 9222 to become available...
+Failed to create session: Timeout waiting for port 9222 after 30s

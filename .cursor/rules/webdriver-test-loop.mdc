@@ -1,0 +1,130 @@
+---
+description: macOS WebDriver test development loop for agents
+globs:
+  - shared-web-tests/webdriver/**
+  - shared-web-tests/scripts/**
+---
+
+# WebDriver Test Development Loop
+
+Use this rule when developing or debugging WebDriver tests against the macOS DuckDuckGo browser.
+
+## Before Writing Tests
+
+**Always inspect the target page HTML first** to understand what elements exist:
+
+```bash
+# Fetch and inspect page structure
+curl -s https://example.com/ | head -100
+
+# Check for dynamic JS that loads content
+curl -s https://example.com/index.mjs
+```
+
+This helps you:
+- Know what selectors to use (`a[href]`, specific IDs, classes)
+- Understand if content is static or dynamically loaded
+- Avoid searching for elements that don't exist (e.g., buttons on a links-only page)
+
+## Development Loop
+
+### Step 1: Build everything and start driver
+
+```bash
+cd shared-web-tests
+npm run build-rust && npm run build:macos && npm run driver:macos
+```
+
+This builds the Rust WebDriver, builds the macOS browser, and starts the driver. The driver runs in the foreground - leave this terminal open.
+
+### Step 2: Run tests (separate terminal)
+
+```bash
+cd shared-web-tests
+npm run test:search-company
+```
+
+Add `-- --no-keep` to auto-close the browser after the test completes.
+
+### Iterate: After making changes
+
+After modifying Rust code (`handler.rs`) or macOS code:
+
+```bash
+# Terminal 1: Stop driver (Ctrl+C), then rebuild and restart
+npm run build-rust && npm run build:macos && npm run driver:macos
+```
+
+```bash
+# Terminal 2: Run test again
+npm run test:search-company
+```
+
+### Quick Restart (driver only, no rebuilds)
+
+```bash
+pkill -f ddgdriver; npm run driver:macos
+```
+
+## Key Files
+
+| File | Purpose |
+|------|---------|
+| `webdriver/src/handler.rs` | WebDriver command handlers (Rust) |
+| `webdriver/src/find-elements.js` | JavaScript injected for FindElements |
+| `scripts/search-company-flow.mjs` | Test script for click-through flow |
+| `webdriver/output.log` | WebDriver server logs |
+
+## Writing Test Scripts
+
+### Keep it simple
+
+1. **Know your page** - inspect HTML before writing selectors
+2. **Use specific selectors** - `a[href]` for links, not broad patterns
+3. **Minimal retries** - if elements aren't there, they aren't there
+4. **Log clearly** - show what was found and what was clicked
+
+### Example: Finding and clicking links
+
+```javascript
+// Simple link finding - no retries needed if page is loaded
+const links = await driver.findElements(By.css('a[href]'));
+console.log(`Found ${links.length} links`);
+
+for (const link of links) {
+    const href = await link.getAttribute('href');
+    const text = await link.getText();
+    console.log(`  - ${text}: ${href}`);
+}
+```
+
+## Debugging
+
+### Check WebDriver Logs
+
+```bash
+# View FindElements results
+grep -E "FindElements raw response|element_ids" webdriver/output.log | tail -20
+
+# Check for errors
+grep -E "error|Error|PoisonError" webdriver/output.log | tail -20
+```
+
+### Common Issues
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `element_ids: []` but UUIDs in response | Old Rust binary | `npm run build-rust` |
+| `ECONNREFUSED 127.0.0.1:4444` | Driver not running | Start driver in another terminal |
+| `PoisonError` in logs | Driver thread panic | Restart driver |
+| `Found 0 links` | Wrong selector or page not loaded | Inspect page HTML, wait for JS |
+
+## Test Page Reference
+
+### search-company.site
+
+The test page at `https://www.search-company.site/`:
+- Loads ads dynamically via `index.mjs`
+- Creates `<a>` links with IDs like `ad-id-0`, `ad-id-1`
+- Links are inside `<section class="ad">` elements
+- Use selector `a[href]` to find all clickable ads

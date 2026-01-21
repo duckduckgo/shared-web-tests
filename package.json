@@ -17,6 +17,7 @@
     "install-hosts": "./build/wpt make-hosts-file | tee -a /etc/hosts",
     "test": "./build/wpt run --product duckduckgo --binary webdriver/target/debug/ddgdriver --log-mach - --log-mach-level debug --log-mach-verbose duckduckgo",
     "webdriver:example": "node scripts/selenium-navigate-example.mjs",
+    "test:search-company": "node scripts/search-company-flow.mjs",
     "build:ios": "./scripts/apple-webdriver.sh build ios",
     "build:macos": "./scripts/apple-webdriver.sh build macos",
     "driver:ios": "./scripts/apple-webdriver.sh driver ios",

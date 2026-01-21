@@ -158,40 +158,86 @@ curl http://localhost:4444/sessions
 
 ## Agent Instructions for Running WebDriver Tests
 
-### Before running any test script:
-1. **Check driver status**: `npm run driver:status` or `curl http://localhost:4444/status`
-2. **Check existing sessions**: `npm run driver:sessions` or `curl http://localhost:4444/sessions`
-3. **If sessions exist**, either:
-   - Delete them via `curl -X DELETE http://localhost:4444/session/{sessionId}`
-   - Restart driver (kill the background process, restart with `npm run driver:ios`)
+### MANDATORY Preflight Checklist (do this BEFORE any test)
 
-### Running tests (two approaches):
-
-**Automatic (preferred for agents):**
+**Step 1: Clean environment first**
 ```bash
-npm run test:search-company:auto  # Starts driver, waits, runs test, exits cleanly
+npm run driver:cleanup   # Cleans sessions, kills stale processes, quits macOS app
 ```
 
-**Manual (for debugging):**
+**Step 2: Start driver (in background terminal or with `&`)**
 ```bash
-# Terminal 1: Start driver
-npm run driver:ios   # or driver:macos
-
-# Terminal 2: Run test
-npm run driver:wait && npm run test:search-company
+npm run driver:macos &   # or driver:ios
+npm run driver:wait      # Wait up to 60s for driver ready
 ```
 
-### Common WebDriver Issues:
+**Step 3: Run your test**
+```bash
+npm run test:search-company -- --no-keep
+```
+
+### Simplified One-Line Commands (preferred)
+
+```bash
+# Full automatic: cleanup → start driver → wait → run test → cleanup
+npm run test:search-company:auto
+
+# Restart driver only (keeps app state)
+npm run driver:restart:macos   # or driver:restart:ios
+
+# Force kill everything (use if graceful cleanup fails)
+npm run driver:kill
+```
+
+### CRITICAL: Rebuild After Code Changes
+
+**After modifying `webdriver/src/*.rs` or `webdriver/src/*.js`:**
+```bash
+npm run build-rust   # JS files are embedded at compile time!
+```
+Then restart the driver: `npm run driver:restart:macos`
+
+**After modifying apple-browsers automation server code:**
+```bash
+npm run build:macos   # Rebuild the app
+npm run driver:restart:macos
+```
+
+### Handling the "DuckDuckGo quit unexpectedly" Dialog
+
+This crash dialog appears when:
+1. The driver process was killed without cleanly closing the browser
+2. The macOS app didn't respond to graceful quit signals
+
+**Prevention:**
+- Always use `npm run driver:cleanup` before starting tests
+- Always pass `--no-keep` to auto-close the browser when test ends
+- Use `npm run test:search-company:auto` which handles cleanup
+
+**Recovery:**
+```bash
+npm run driver:kill        # Force kill everything
+# Click "Ignore" on the crash dialog if it appears
+npm run driver:macos       # Start fresh
+```
+
+### Common WebDriver Issues
+
+**Port 4444 already in use:**
+```bash
+npm run driver:cleanup   # Preferred: cleans up properly
+# or force: npm run driver:kill
+```
+
+**Session already started errors:**
+```bash
+npm run driver:cleanup   # Deletes all sessions and restarts
+```
 
 **target="_blank" links:**
 - Links with `target="_blank"` open new tabs, not navigate current page
 - Solution: Use `driver.get(href)` instead of `element.click()` for such links
 - Detection: Check `await element.getAttribute('target')` before clicking
-
-**Stale sessions:**
-- Scripts include automatic cleanup but may need driver restart
-- Symptoms: "Session already started" errors
-- Fix: Stop driver (Ctrl+C), restart with `npm run driver:ios`
 
 **Element not found:**
 - Page may still be loading
@@ -202,3 +248,11 @@ npm run driver:wait && npm run test:search-company
 - Element may be obscured, or link has `target="_blank"`
 - Check WebDriver logs for "clicked" responses without URL change
 - Try direct navigation: `driver.get(targetUrl)` instead of clicking
+
+### WebDriver Commands Not Implemented
+
+If a Selenium method silently fails (returns null), check `webdriver/src/handler.rs` for the command implementation. Common missing commands fall through to the default case and return null.
+
+**Currently implemented:** NewSession, DeleteSession, Get, FindElement, FindElements, ElementClick, ElementSendKeys, ElementClear, ExecuteScript, ExecuteAsyncScript, GetCurrentUrl, GetTitle, GetPageSource, GetWindowHandle, GetWindowHandles, NewWindow, CloseWindow, SwitchToWindow, TakeScreenshot
+
+**To add a new command:** Add handler in `handler.rs`, rebuild with `npm run build-rust`

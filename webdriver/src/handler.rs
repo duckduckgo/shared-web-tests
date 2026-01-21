@@ -411,8 +411,11 @@ fn launch_macos_app(app_path: &str, port: u16) -> Result<(Child, String), String
     write_macos_defaults(&bundle_id, "isOnboardingCompleted", "string", "true");
 
     // Launch the app
+    // Remove CI env var to prevent app from thinking it's in UI test mode
+    // (which would cause it to try loading MockEncryptionKeyStore that doesn't exist)
     let child = Command::new("open")
         .args(&["-a", app_path, "--args", "-isUITesting", "true"])
+        .env_remove("CI")
         .spawn()
         .map_err(|e| format!("Failed to launch app: {}", e))?;
 
@@ -434,9 +437,68 @@ fn monitor_macos_logs(bundle_id: &str) -> Child {
     child
 }
 
-fn quit_macos_app() {
+fn quit_macos_app_with_port(port: Option<u16>) {
+    info!("Quitting macOS app gracefully via /shutdown endpoint...");
+    
+    // Call the /shutdown endpoint which cleanly closes the automation server
+    // and then terminates the app via exit(0) - avoiding crash dialogs
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(3))
+        .build();
+    
+    // If we have the actual port, use it; otherwise try common ports as fallback
+    let ports_to_try: Vec<u16> = match port {
+        Some(p) => vec![p],
+        None => (8557..=8570).collect(), // Try a range of ports as fallback
+    };
+    
+    if let Ok(client) = client {
+        for port in ports_to_try {
+            let url = format!("http://localhost:{}/shutdown", port);
+            info!("Trying shutdown on port {}...", port);
+            match client.get(&url).send() {
+                Ok(response) => {
+                    info!("Shutdown response on port {}: {:?}", port, response.status());
+                    if response.status().is_success() {
+                        break;
+                    }
+                },
+                Err(e) => {
+                    info!("Shutdown on port {} failed: {}", port, e);
+                }
+            }
+        }
+    }
+    
+    // Wait for the app to terminate (the /shutdown endpoint schedules exit after 0.5s)
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    
+    // Verify it's not running
+    for _ in 0..10 {
+        if !is_macos_app_running("com.duckduckgo.macos.browser") {
+            info!("macOS app terminated cleanly");
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(200));
+    }
+    
+    // Fallback: if /shutdown didn't work, try AppleScript
+    info!("App still running, trying AppleScript quit...");
     let _ = Command::new("osascript")
         .args(&["-e", "tell application \"DuckDuckGo\" to quit"])
+        .output();
+    
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    
+    if !is_macos_app_running("com.duckduckgo.macos.browser") {
+        info!("macOS app quit via AppleScript");
+        return;
+    }
+    
+    // Last resort - SIGTERM
+    info!("App not responding, sending SIGTERM...");
+    let _ = Command::new("pkill")
+        .args(&["-TERM", "-f", "DuckDuckGo.app"])
         .output();
 }
 
@@ -836,7 +898,8 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 info!("Deleting session {:?}", session_id);
                 match platform {
                     Platform::MacOS => {
-                        quit_macos_app();
+                        let port = get_port(session_id);
+                        quit_macos_app_with_port(Some(port));
                     },
                     Platform::IOS => {
                         // Shutdown the simulator
@@ -1375,15 +1438,21 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
         };
      }
  
-     fn teardown_session(&mut self, kind: SessionTeardownKind) {
-        println!("Tearing down session");
-        info!("Tearing down session");
-        /*
-         let wait_for_shutdown = match kind {
-             SessionTeardownKind::Deleted => true,
-             SessionTeardownKind::NotDeleted => false,
-         };
-         self.close_connection(wait_for_shutdown);
-        */
-     }
- }
+    fn teardown_session(&mut self, kind: SessionTeardownKind) {
+       info!("Tearing down session (kind: {:?})", kind);
+       
+       let platform = Platform::from_env();
+       match platform {
+           Platform::MacOS => {
+               if matches!(kind, SessionTeardownKind::Deleted) {
+                   // Quit app via /shutdown endpoint which cleanly terminates
+                   // without crash dialogs (no port known here, use fallback)
+                   quit_macos_app_with_port(None);
+               }
+           },
+           Platform::IOS => {
+               // iOS cleanup handled by DeleteSession command
+           }
+       }
+    }
+}

@@ -7,7 +7,7 @@ const localRequire = createRequire(import.meta.url);
 const selenium = localRequire('selenium-webdriver');
 
 const args = process.argv.slice(2);
-const keepOpen = args.includes('--keep');
+const keepOpen = args.includes('--keep') || !args.includes('--no-keep'); // Default to keeping open unless --no-keep is specified
 const url = args.find((arg) => !arg.startsWith('--')) ?? 'https://example.com';
 
 const serverUrl = process.env.WEBDRIVER_SERVER_URL ?? 'http://localhost:4444';
@@ -70,9 +70,11 @@ try {
     console.log(JSON.stringify({ ok: true, url, title }));
 
     if (keepOpen) {
-        console.log('\nBrowser will stay open. Press Ctrl+C to quit.');
+        console.log('\n✅ Browser will stay open. Press Ctrl+C to quit.');
         // Keep the process alive
         await new Promise(() => {});
+    } else {
+        console.log('\n⚠️  Browser will close automatically. Use --keep to keep it open.');
     }
 } catch (error) {
     console.error('Error:', error.message);

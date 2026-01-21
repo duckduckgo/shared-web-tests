@@ -103,16 +103,16 @@ npm run test:ios       # or npm run test:macos
 ./scripts/apple-webdriver.sh build ios /path/to/apple-browsers
 ./scripts/apple-webdriver.sh build macos /path/to/apple-browsers
 
-# Keep the browser open after test completes
-./scripts/apple-webdriver.sh example ios --keep
-./scripts/apple-webdriver.sh example macos --keep
+# Browser stays open by default (use --no-keep to close automatically)
+./scripts/apple-webdriver.sh example ios
+./scripts/apple-webdriver.sh example macos
 
 # Navigate to a specific URL
 ./scripts/apple-webdriver.sh example ios https://duckduckgo.com
 ./scripts/apple-webdriver.sh example macos https://duckduckgo.com
 
-# Combine options
-./scripts/apple-webdriver.sh example macos https://duckduckgo.com --keep
+# Close browser automatically after test
+./scripts/apple-webdriver.sh example macos https://duckduckgo.com --no-keep
 ```
 
 ### Environment Variables

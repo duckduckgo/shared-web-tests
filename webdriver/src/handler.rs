@@ -342,6 +342,21 @@ fn write_macos_defaults(bundle_id: &str, key: &str, key_type: &str, value: &str)
     }
 }
 
+fn is_macos_app_running(_bundle_id: &str) -> bool {
+    // Check if DuckDuckGo app is running using osascript
+    let output = Command::new("osascript")
+        .args(&["-e", "tell application \"System Events\" to (name of processes) contains \"DuckDuckGo\""])
+        .output();
+    
+    match output {
+        Ok(out) if out.status.success() => {
+            let result = String::from_utf8_lossy(&out.stdout).trim();
+            result == "true"
+        },
+        _ => false,
+    }
+}
+
 fn launch_macos_app(app_path: &str, port: u16) -> Result<(Child, String), String> {
     info!("Launching macOS app at: {}", app_path);
 
@@ -349,13 +364,33 @@ fn launch_macos_app(app_path: &str, port: u16) -> Result<(Child, String), String
     let bundle_id = get_macos_bundle_id(app_path);
     info!("Detected bundle ID: {}", bundle_id);
 
-    // First, quit any running instance
-    let _ = Command::new("osascript")
-        .args(&["-e", "tell application \"DuckDuckGo\" to quit"])
-        .output();
+    // First, quit any running instance more forcefully
+    if is_macos_app_running(&bundle_id) {
+        info!("App is running, quitting...");
+        
+        // Try graceful quit first
+        let _ = Command::new("osascript")
+            .args(&["-e", "tell application \"DuckDuckGo\" to quit"])
+            .output();
 
-    // Wait a bit for the app to quit
-    std::thread::sleep(std::time::Duration::from_millis(500));
+        // Wait and check if it quit
+        let mut attempts = 0;
+        while is_macos_app_running(&bundle_id) && attempts < 20 {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            attempts += 1;
+        }
+
+        // If still running, force kill
+        if is_macos_app_running(&bundle_id) {
+            info!("App still running, force killing...");
+            let _ = Command::new("killall")
+                .args(&["-9", "DuckDuckGo"])
+                .output();
+            
+            // Wait a bit more for cleanup
+            std::thread::sleep(std::time::Duration::from_millis(500));
+        }
+    }
 
     // Write the automation port to defaults using correct bundle ID
     write_macos_defaults(&bundle_id, "automationPort", "int", &port.to_string());

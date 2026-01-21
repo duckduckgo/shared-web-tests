@@ -74,41 +74,118 @@ Getting logs from the emulator:
 xcrun simctl spawn booted log show --last 900m --info --debug --predicate 'subsystem == "com.duckduckgo.mobile.ios"' --style compact
 ```
 
-Building the iOS test build:
+## Apple WebDriver Testing (iOS & macOS)
+
+### Quick Start
+
 ```bash
-source .maestro/common.sh && build_app
+# Terminal 1: Build the app (first time or after code changes)
+npm run build:ios      # or npm run build:macos
+
+# Terminal 1: Start the WebDriver server
+npm run driver:ios     # or npm run driver:macos
+
+# Terminal 2: Run the example test (must match the platform from Terminal 1!)
+npm run example        # defaults to iOS, or use npm run example:ios / npm run example:macos
+
+# ⚠️ Important: The example command connects to whatever driver is running.
+# Make sure you run the matching platform driver and example commands!
+# Default is iOS - use npm run example:macos for macOS.
+
+# Or run the full test suite
+npm run test:ios       # or npm run test:macos
 ```
 
-Building the web driver API:
+### Options
+
+```bash
+# Build from a different apple-browsers location
+./scripts/apple-webdriver.sh build ios /path/to/apple-browsers
+./scripts/apple-webdriver.sh build macos /path/to/apple-browsers
+
+# Keep the browser open after test completes
+./scripts/apple-webdriver.sh example ios --keep
+./scripts/apple-webdriver.sh example macos --keep
+
+# Navigate to a specific URL
+./scripts/apple-webdriver.sh example ios https://duckduckgo.com
+./scripts/apple-webdriver.sh example macos https://duckduckgo.com
+
+# Combine options
+./scripts/apple-webdriver.sh example macos https://duckduckgo.com --keep
+```
+
+### Environment Variables
+
+- `APPLE_BROWSERS_DIR` - Path to apple-browsers repo (default: `../apple-browsers`)
+- `DERIVED_DATA_PATH` - Path to DerivedData containing the built app
+- `MACOS_APP_PATH` - Path to macOS app (for macos platform)
+- `TARGET_PLATFORM` - Target platform (`ios` or `macos`)
+- `PLATFORM` - Platform override (`ios` or `macos`)
+
+### Manual Steps (if needed)
+
+Building the iOS app:
+
+```bash
+cd ../apple-browsers
+source .maestro/common.sh && build_app 1
+```
+
+The iOS app will be built to `apple-browsers/DerivedData/Build/Products/Debug-iphonesimulator/DuckDuckGo.app`
+
+Building the macOS app:
+
+```bash
+cd ../apple-browsers
+xcodebuild -project macOS/DuckDuckGo-macOS.xcodeproj \
+           -scheme "macOS Browser" \
+           -derivedDataPath DerivedData \
+           -skipPackagePluginValidation \
+           -skipMacroValidation
+```
+
+The macOS app will be built to `apple-browsers/DerivedData/Build/Products/Debug/DuckDuckGo.app`
+
+Building the WebDriver:
+
 ```bash
 cd webdriver
 cargo build
 ```
 
-Running the suite (iOS):
+Starting the driver manually:
+
 ```bash
+# iOS
+cd webdriver
+DERIVED_DATA_PATH="../../apple-browsers/DerivedData" ./target/debug/ddgdriver --port 4444
+
+# macOS
+cd webdriver
+MACOS_APP_PATH="../../apple-browsers/DerivedData/Build/Products/Debug/DuckDuckGo.app" \
+TARGET_PLATFORM=macos \
+DERIVED_DATA_PATH="../../apple-browsers/DerivedData" \
+./target/debug/ddgdriver --port 4444
+```
+
+Running the example test manually:
+
+```bash
+npm run webdriver:example
+# or with options
+node scripts/selenium-navigate-example.mjs https://duckduckgo.com --keep
+```
+
+Running the full suite:
+
+```bash
+# iOS
 ./build/wpt run --product duckduckgo --binary webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info duckduckgo
-```
 
-## macOS Testing
-
-### Finding your built app
-
-Find existing DuckDuckGo.app builds in Xcode's DerivedData:
-```bash
-find ~/Library/Developer/Xcode/DerivedData -name "DuckDuckGo.app" -path "*/Debug/*" -type d 2>/dev/null | grep -v iphonesimulator
-```
-
-### Running the suite (macOS)
-
-```bash
-cd shared-web-tests
+# macOS
 source build/_venv3/bin/activate
-
-# Set the path to your built macOS app
 export MACOS_APP_PATH="/path/to/DuckDuckGo.app"
-
-# Run with macOS target platform
 TARGET_PLATFORM=macos ./build/wpt run --product duckduckgo --binary webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info duckduckgo
 ```
 

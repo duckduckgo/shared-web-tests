@@ -270,9 +270,21 @@ pub enum Platform {
 
 impl Platform {
     fn from_env() -> Self {
-        match std::env::var("TARGET_PLATFORM").as_deref() {
-            Ok("macos") | Ok("macOS") | Ok("mac") => Platform::MacOS,
-            _ => Platform::IOS, // Default to iOS for backward compatibility
+        let env_value = std::env::var("TARGET_PLATFORM");
+        info!("TARGET_PLATFORM env var: {:?}", env_value);
+        match env_value.as_deref() {
+            Ok("macos") | Ok("macOS") | Ok("mac") => {
+                info!("Detected macOS platform");
+                Platform::MacOS
+            },
+            Ok(val) => {
+                info!("TARGET_PLATFORM={} not recognized, defaulting to iOS", val);
+                Platform::IOS
+            },
+            Err(_) => {
+                info!("TARGET_PLATFORM not set, defaulting to iOS");
+                Platform::IOS // Default to iOS for backward compatibility
+            }
         }
     }
 

@@ -15,7 +15,19 @@
     "lint": "eslint . && npm run tsc && npx prettier . --check",
     "lint-fix": "eslint . --fix && npx prettier . --write",
     "install-hosts": "./build/wpt make-hosts-file | tee -a /etc/hosts",
-    "test": "./build/wpt run --product duckduckgo --binary webdriver/target/debug/ddgdriver --log-mach - --log-mach-level debug --log-mach-verbose duckduckgo"
+    "test": "./build/wpt run --product duckduckgo --binary webdriver/target/debug/ddgdriver --log-mach - --log-mach-level debug --log-mach-verbose duckduckgo",
+    "webdriver:example": "node scripts/selenium-navigate-example.mjs",
+    "build:ios": "./scripts/apple-webdriver.sh build ios",
+    "build:macos": "./scripts/apple-webdriver.sh build macos",
+    "driver:ios": "./scripts/apple-webdriver.sh driver ios",
+    "driver:macos": "./scripts/apple-webdriver.sh driver macos",
+    "example": "./scripts/apple-webdriver.sh example ios",
+    "example:ios": "./scripts/apple-webdriver.sh example ios",
+    "example:macos": "./scripts/apple-webdriver.sh example macos",
+    "example:keep": "./scripts/apple-webdriver.sh example ios --keep",
+    "example:macos:keep": "./scripts/apple-webdriver.sh example macos --keep",
+    "test:ios": "./scripts/apple-webdriver.sh test ios",
+    "test:macos": "./scripts/apple-webdriver.sh test macos"
   },
   "type": "module",
   "author": "DuckDuckGo",
@@ -26,5 +38,10 @@
     "http-server": "^14.1.1",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.15.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "prettier": "^3.7.4",
+    "selenium-webdriver": "^4.35.0"
   }
 }

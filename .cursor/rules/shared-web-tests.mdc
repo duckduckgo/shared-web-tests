@@ -1,0 +1,157 @@
+# Shared Web Tests Repository
+
+## What This Repo Does
+
+This repository provides WebDriver testing infrastructure for DuckDuckGo browsers (iOS & macOS). It includes:
+- A Rust-based WebDriver server (`ddgdriver`) that communicates with Apple browsers via automation servers
+- Test utilities and example scripts for Selenium-based testing
+- Integration with web-platform-tests (WPT) for cross-browser compatibility testing
+
+## Quick Start - Running Example Scripts
+
+### Setup (First Time)
+```bash
+# Install dependencies
+npm install
+
+# Build the WebDriver binary
+npm run build-rust
+
+# Build the Apple browser app (iOS or macOS)
+npm run build:ios      # or npm run build:macos
+```
+
+### Running Tests
+
+**Two-terminal workflow:**
+
+```bash
+# Terminal 1: Start the WebDriver server
+npm run driver:ios     # or npm run driver:macos
+
+# Terminal 2: Run example test (must match platform from Terminal 1!)
+npm run example        # defaults to iOS
+npm run example:macos  # for macOS
+npm run example:ios    # explicit iOS
+```
+
+**Example with custom URL:**
+```bash
+./scripts/apple-webdriver.sh example ios https://duckduckgo.com
+./scripts/apple-webdriver.sh example macos https://duckduckgo.com --no-keep
+```
+
+**Direct script execution:**
+```bash
+node scripts/selenium-navigate-example.mjs https://example.com --keep
+```
+
+## Critical Debugging Steps
+
+### 1. Check Simulator/App Logs
+
+**iOS Simulator logs:**
+```bash
+xcrun simctl spawn booted log show --last 900m --info --debug \
+  --predicate 'subsystem == "com.duckduckgo.mobile.ios"' \
+  --style compact
+```
+
+**macOS app logs:**
+- Check Console.app for DuckDuckGo browser logs
+- Look for automation server errors (port 8788)
+- Check for "Invalid device" errors in logs
+
+**WebDriver output:**
+- The WebDriver server prints detailed logs including:
+  - Simulator logs (prefixed with "Simulator logs:")
+  - Request/response details
+  - Element finding results
+
+### 2. Recompile WebDriver After Code Changes
+
+**After modifying Rust code (`webdriver/src/*.rs`):**
+```bash
+cd webdriver
+cargo build
+# Or from repo root:
+npm run build-rust
+```
+
+**After modifying JavaScript files (`webdriver/src/*.js`):**
+- JavaScript files are embedded at compile time
+- **Must rebuild** the Rust binary: `npm run build-rust`
+
+**After modifying automation server code (in apple-browsers):**
+- Rebuild the app: `npm run build:ios` or `npm run build:macos`
+- Restart the WebDriver server
+
+### 3. Common Issues & Solutions
+
+**"Invalid device" error in logs:**
+- Check session ID matches between WebDriver and automation server
+- Verify the app is running and automation server is active
+- Restart both the app and WebDriver server
+
+**Empty element arrays from FindElements:**
+- Verify JavaScript variables (`using`, `value`) are defined in the script context
+- Check if page is fully loaded (script waits for `document.readyState === 'complete'`)
+- Verify CSS selectors work in browser DevTools
+- Check `webdriver/KNOWN_ISSUES.md` for current issues
+
+**Session already exists:**
+- Stop the WebDriver server (Ctrl+C)
+- Restart: `npm run driver:ios` or `npm run driver:macos`
+- Or cleanup existing sessions programmatically
+
+**Port conflicts:**
+- WebDriver default: port 4444
+- macOS automation server: port 8788
+- Ensure ports are not in use: `lsof -i :4444` or `lsof -i :8788`
+
+### 4. Manual Testing & Verification
+
+**Test automation server directly (macOS):**
+```bash
+curl "http://localhost:8788/getUrl"
+curl "http://localhost:8788/navigate?url=https://example.com"
+```
+
+**Verify WebDriver server is running:**
+```bash
+curl http://localhost:4444/status
+curl http://localhost:4444/sessions
+```
+
+**Check app paths:**
+- iOS: `$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/DuckDuckGo.app`
+- macOS: `$DERIVED_DATA_PATH/Build/Products/Debug/DuckDuckGo.app`
+- Or set `MACOS_APP_PATH` env var explicitly
+
+### 5. Environment Variables
+
+- `APPLE_BROWSERS_DIR` - Path to apple-browsers repo (default: `../apple-browsers`)
+- `DERIVED_DATA_PATH` - Path to DerivedData with built app
+- `MACOS_APP_PATH` - Explicit path to macOS app bundle
+- `TARGET_PLATFORM` - `ios` or `macos` (affects which app to use)
+- `PLATFORM` - Platform override
+- `WEBDRIVER_SERVER_URL` - WebDriver server URL (default: `http://localhost:4444`)
+
+## File Structure
+
+- `webdriver/` - Rust WebDriver server implementation
+  - `src/handler.rs` - WebDriver command handlers
+  - `src/find-element.js` - Single element finding script
+  - `src/find-elements.js` - Multiple elements finding script
+- `scripts/` - Test scripts and utilities
+  - `selenium-navigate-example.mjs` - Basic navigation example
+  - `apple-webdriver.sh` - Build/driver/test orchestration script
+- `web-platform-tests/` - WPT submodule (large, gitignored in some contexts)
+
+## Important Notes
+
+- **Always rebuild WebDriver** after modifying Rust or JavaScript code
+- **Check simulator logs** when debugging element finding or navigation issues
+- **Match platform** between driver and example commands (iOS vs macOS)
+- The WebDriver server must be running before executing test scripts
+- Browser stays open by default; use `--no-keep` to auto-close

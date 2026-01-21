@@ -706,10 +706,10 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                                     // Server not ready yet
                                 }
                             }
-                            attempts += 1;
-                            if attempts > 60 { // 30 seconds timeout
-                                panic!("Timeout waiting for automation server to start");
-                            }
+                        attempts += 1;
+                        if attempts > 120 { // 60 seconds timeout
+                            panic!("Timeout waiting for automation server to start");
+                        }
                             std::thread::sleep(std::time::Duration::from_millis(500));
                         }
                         
@@ -1210,6 +1210,91 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 // Response is "true" or "false" string, or "1"/"0"
                 let is_displayed = response == "true" || response == "1";
                 return Ok(WebDriverResponse::Generic(ValueResponse(Value::Bool(is_displayed))));
+            },
+            ElementSendKeys(element_ref, keys) => {
+                info!("ElementSendKeys called: element={}, keys={:?}", element_ref, keys);
+                let script_body = r#"
+                if (!window.__webdriver_script_results) {
+                    throw new Error('No elements found');
+                }
+                let element;
+                for (const [el, id] of window.__webdriver_script_results) {
+                    if (id === elementId) {
+                        element = el;
+                        break;
+                    }
+                }
+                if (!element) {
+                    throw new Error('Element not found: ' + elementId);
+                }
+                // Focus the element
+                element.focus();
+                // Set the value - handle different input types
+                if ('value' in element) {
+                    element.value = textToSend;
+                } else if (element.isContentEditable) {
+                    element.textContent = textToSend;
+                }
+                // Dispatch events to trigger any listeners
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                return 'sent';
+                "#;
+                // The keys parameter contains a "text" field with the text to send
+                let text = keys.text.as_str();
+                let script = [
+                    format!("let elementId = '{}';", &element_ref),
+                    format!("let textToSend = {};", serde_json::to_string(text).unwrap()),
+                    script_body.to_string(),
+                ].join(" ");
+                let script = urlencoding::encode(&script).to_string();
+                let mut params = std::collections::HashMap::new();
+                params.insert("script", script.as_str());
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                let response = server_request_for_platform(session_id, &platform, "execute", &params);
+                info!("ElementSendKeys response: {:?}", response);
+                return Ok(WebDriverResponse::Void);
+            },
+            ElementClear(element_ref) => {
+                info!("ElementClear called: element={}", element_ref);
+                let script_body = r#"
+                if (!window.__webdriver_script_results) {
+                    throw new Error('No elements found');
+                }
+                let element;
+                for (const [el, id] of window.__webdriver_script_results) {
+                    if (id === elementId) {
+                        element = el;
+                        break;
+                    }
+                }
+                if (!element) {
+                    throw new Error('Element not found: ' + elementId);
+                }
+                // Focus the element
+                element.focus();
+                // Clear the value
+                if ('value' in element) {
+                    element.value = '';
+                } else if (element.isContentEditable) {
+                    element.textContent = '';
+                }
+                // Dispatch events to trigger any listeners
+                element.dispatchEvent(new Event('input', { bubbles: true }));
+                element.dispatchEvent(new Event('change', { bubbles: true }));
+                return 'cleared';
+                "#;
+                let script = [
+                    format!("let elementId = '{}';", &element_ref),
+                    script_body.to_string(),
+                ].join(" ");
+                let script = urlencoding::encode(&script).to_string();
+                let mut params = std::collections::HashMap::new();
+                params.insert("script", script.as_str());
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                let response = server_request_for_platform(session_id, &platform, "execute", &params);
+                info!("ElementClear response: {:?}", response);
+                return Ok(WebDriverResponse::Void);
             },
             GetTitle => {
                 let script = "return document.title || '';";

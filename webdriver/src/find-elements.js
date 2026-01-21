@@ -9,9 +9,13 @@ if (document.readyState != 'complete') {
 
 function selectElements(using, selector) {
     switch (using) {
+        case 'id': {
+            const el = document.getElementById(selector);
+            return el ? [el] : [];
+        }
         case 'css selector':
             return Array.from(document.querySelectorAll(selector));
-        case 'link text':
+        case 'link text': {
             // XPath for link text
             const xpath = `//a[contains(text(), '${selector}')]`;
             const result = document.evaluate(xpath, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
@@ -20,13 +24,21 @@ function selectElements(using, selector) {
                 elements.push(result.snapshotItem(i));
             }
             return elements;
-        case 'xpath':
+        }
+        case 'xpath': {
             const xpathResult = document.evaluate(selector, document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
             const xpathElements = [];
             for (let i = 0; i < xpathResult.snapshotLength; i++) {
                 xpathElements.push(xpathResult.snapshotItem(i));
             }
             return xpathElements;
+        }
+        case 'tag name':
+            return Array.from(document.getElementsByTagName(selector));
+        case 'class name':
+            return Array.from(document.getElementsByClassName(selector));
+        case 'name':
+            return Array.from(document.getElementsByName(selector));
         default:
             throw new Error('Unsupported locator strategy: ' + using);
     } 

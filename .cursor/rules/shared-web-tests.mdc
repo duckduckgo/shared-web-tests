@@ -155,3 +155,50 @@ curl http://localhost:4444/sessions
 - **Match platform** between driver and example commands (iOS vs macOS)
 - The WebDriver server must be running before executing test scripts
 - Browser stays open by default; use `--no-keep` to auto-close
+
+## Agent Instructions for Running WebDriver Tests
+
+### Before running any test script:
+1. **Check driver status**: `npm run driver:status` or `curl http://localhost:4444/status`
+2. **Check existing sessions**: `npm run driver:sessions` or `curl http://localhost:4444/sessions`
+3. **If sessions exist**, either:
+   - Delete them via `curl -X DELETE http://localhost:4444/session/{sessionId}`
+   - Restart driver (kill the background process, restart with `npm run driver:ios`)
+
+### Running tests (two approaches):
+
+**Automatic (preferred for agents):**
+```bash
+npm run test:search-company:auto  # Starts driver, waits, runs test, exits cleanly
+```
+
+**Manual (for debugging):**
+```bash
+# Terminal 1: Start driver
+npm run driver:ios   # or driver:macos
+
+# Terminal 2: Run test
+npm run driver:wait && npm run test:search-company
+```
+
+### Common WebDriver Issues:
+
+**target="_blank" links:**
+- Links with `target="_blank"` open new tabs, not navigate current page
+- Solution: Use `driver.get(href)` instead of `element.click()` for such links
+- Detection: Check `await element.getAttribute('target')` before clicking
+
+**Stale sessions:**
+- Scripts include automatic cleanup but may need driver restart
+- Symptoms: "Session already started" errors
+- Fix: Stop driver (Ctrl+C), restart with `npm run driver:ios`
+
+**Element not found:**
+- Page may still be loading
+- Use `waitForPageReady(driver)` helper before finding elements
+- Verify selectors work in browser DevTools first
+
+**Click doesn't navigate:**
+- Element may be obscured, or link has `target="_blank"`
+- Check WebDriver logs for "clicked" responses without URL change
+- Try direct navigation: `driver.get(targetUrl)` instead of clicking

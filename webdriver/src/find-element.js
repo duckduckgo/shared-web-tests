@@ -9,12 +9,20 @@ if (document.readyState != 'complete') {
 
 function selectElement(using, selector) {
     switch (using) {
+        case 'id':
+            return document.getElementById(selector);
         case 'css selector':
             return document.querySelector(selector);
         case 'link text':
             selector = `//a[contains(text(), '${selector}')]`;
         case 'xpath':
             return document.evaluate(selector, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
+        case 'tag name':
+            return document.getElementsByTagName(selector)[0] || null;
+        case 'class name':
+            return document.getElementsByClassName(selector)[0] || null;
+        case 'name':
+            return document.getElementsByName(selector)[0] || null;
         default:
             throw new Error('Unsupported locator strategy: ' + using);
     } 

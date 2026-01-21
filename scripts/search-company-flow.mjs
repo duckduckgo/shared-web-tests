@@ -39,6 +39,44 @@ async function cleanupExistingSessions() {
     }
 }
 
+// Fill out the checkout form
+async function fillCheckoutForm(driver) {
+    console.log('\n📝 Filling out checkout form...');
+    
+    const fields = [
+        { id: 'cc-name', value: 'John Test', label: 'Cardholder Name' },
+        { id: 'cc-number', value: '4111111111111111', label: 'Card Number' },
+        { id: 'cc-exp-month', value: '12', label: 'Expiry Month' },
+        { id: 'cc-exp-year', value: '2028', label: 'Expiry Year' },
+        { id: 'cc-csc', value: '123', label: 'CSC' },
+    ];
+    
+    for (const field of fields) {
+        try {
+            const input = await driver.findElement(By.id(field.id));
+            await input.clear();
+            await input.sendKeys(field.value);
+            console.log(`   ✓ ${field.label}: ${field.value}`);
+        } catch (e) {
+            console.warn(`   ✗ Failed to fill ${field.label}:`, e.message);
+        }
+    }
+    
+    // Click the Pay button
+    try {
+        const payButton = await driver.findElement(By.id('pay-button'));
+        console.log('   Clicking Pay button...');
+        await payButton.click();
+        await waitForPageReady(driver);
+        const newUrl = await driver.getCurrentUrl();
+        console.log(`   ✓ Form submitted! Now at: ${newUrl}`);
+        return true;
+    } catch (e) {
+        console.warn('   ✗ Failed to submit form:', e.message);
+        return false;
+    }
+}
+
 // Wait for page to be ready (document.readyState === 'complete')
 async function waitForPageReady(driver, timeout = 10000) {
     const start = Date.now();
@@ -150,7 +188,21 @@ async function clickThroughFlow(driver, startUrl) {
                 if (normalizedTarget !== normalizedCurrent && !visitedUrls.has(normalizedTarget)) {
                     console.log(`   Clicking: "${link.text || link.href}"`);
                     
-                    await link.element.click();
+                    // Check for target="_blank" which opens in new tab
+                    let linkTarget = null;
+                    try {
+                        linkTarget = await link.element.getAttribute('target');
+                    } catch (e) {
+                        // Ignore attribute errors
+                    }
+                    
+                    if (linkTarget === '_blank') {
+                        // Navigate directly instead of clicking (new tab links won't work)
+                        console.log(`   (target="_blank" detected, navigating directly)`);
+                        await driver.get(targetUrl);
+                    } else {
+                        await link.element.click();
+                    }
                     await waitForPageReady(driver);
                     
                     // Verify navigation
@@ -171,6 +223,15 @@ async function clickThroughFlow(driver, startUrl) {
         }
         
         if (!clicked) {
+            // Check if we're on checkout page and should fill the form
+            if (currentUrl.includes('checkout')) {
+                const formFilled = await fillCheckoutForm(driver);
+                if (formFilled) {
+                    // Update current URL after form submission
+                    currentUrl = await driver.getCurrentUrl();
+                    visitedUrls.add(currentUrl.split('#')[0]);
+                }
+            }
             console.log('No new pages to visit. Flow complete!');
             break;
         }

@@ -1,4 +1,9 @@
 import { createRequire } from 'node:module';
+import { writeFile, mkdir } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const scriptsDir = dirname(fileURLToPath(import.meta.url));
 
 const localRequire = createRequire(import.meta.url);
 
@@ -8,10 +13,28 @@ const { By } = selenium;
 
 const args = process.argv.slice(2);
 const keepOpen = args.includes('--keep') || !args.includes('--no-keep');
+const takeScreenshot = args.includes('--screenshot');
 const url = args.find((arg) => !arg.startsWith('--')) ?? 'https://www.search-company.site/';
 
 const serverUrl = process.env.WEBDRIVER_SERVER_URL ?? 'http://localhost:4444';
 const expectedPlatform = process.env.PLATFORM || process.env.TARGET_PLATFORM;
+
+// Save a screenshot to file
+async function saveScreenshot(driver, filename) {
+    const screenshotsDir = join(scriptsDir, '..', 'screenshots');
+    try {
+        await mkdir(screenshotsDir, { recursive: true });
+        const screenshotBase64 = await driver.takeScreenshot();
+        const screenshotBuffer = Buffer.from(screenshotBase64, 'base64');
+        const filepath = join(screenshotsDir, filename);
+        await writeFile(filepath, screenshotBuffer);
+        console.log(`📸 Screenshot saved: ${filepath}`);
+        return filepath;
+    } catch (e) {
+        console.error('❌ Failed to take screenshot:', e.message);
+        return null;
+    }
+}
 
 // Helper to clean up any existing sessions
 async function cleanupExistingSessions() {
@@ -269,6 +292,12 @@ try {
     }
 
     await clickThroughFlow(driver, url);
+
+    // Take screenshot at end of flow
+    if (takeScreenshot) {
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        await saveScreenshot(driver, `search-company-final-${timestamp}.png`);
+    }
 
     if (keepOpen) {
         console.log('\n✅ Browser will stay open. Press Ctrl+C to quit.');

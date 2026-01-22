@@ -221,6 +221,46 @@ npm run driver:kill        # Force kill everything
 npm run driver:macos       # Start fresh
 ```
 
+### Taking Screenshots for Debugging
+
+The WebDriver supports taking screenshots of the current page state - useful for debugging test failures or capturing visual evidence.
+
+**Quick screenshot during test:**
+```bash
+# Run search-company flow with screenshot at end
+npm run test:search-company -- --screenshot --no-keep
+
+# Screenshots saved to: shared-web-tests/screenshots/
+```
+
+**Programmatic screenshot in test code:**
+```javascript
+import { writeFile } from 'node:fs/promises';
+
+// Take full page screenshot
+const screenshotBase64 = await driver.takeScreenshot();
+
+// Save to file
+const buffer = Buffer.from(screenshotBase64, 'base64');
+await writeFile('debug-screenshot.png', buffer);
+```
+
+**Element screenshot (capture specific element):**
+```javascript
+const element = await driver.findElement(By.css('.my-selector'));
+const elementScreenshot = await element.takeScreenshot();
+```
+
+**When to use screenshots:**
+- Test is failing and you need to see the page state
+- Verifying visual state at specific points in a flow
+- Documenting browser behavior for bug reports
+- Capturing blocked tracker lists or privacy UI state
+
+**Screenshot location:**
+- Default: `shared-web-tests/screenshots/`
+- Filename format: `search-company-final-{timestamp}.png`
+
 ### Common WebDriver Issues
 
 **Port 4444 already in use:**

@@ -100,6 +100,30 @@ for (const link of links) {
 
 ## Debugging
 
+### Take Screenshots
+
+Capture page state for debugging when tests fail or behave unexpectedly:
+
+```bash
+# Run with screenshot capture at end
+npm run test:search-company -- --screenshot --no-keep
+
+# Screenshots saved to: shared-web-tests/screenshots/
+```
+
+**In test code:**
+```javascript
+// Capture current page state
+const screenshot = await driver.takeScreenshot();
+const buffer = Buffer.from(screenshot, 'base64');
+await writeFile('debug-state.png', buffer);
+```
+
+Use screenshots to:
+- See actual page state when elements aren't found
+- Verify navigation completed correctly
+- Document blocked trackers or privacy UI
+
 ### Check WebDriver Logs
 
 ```bash

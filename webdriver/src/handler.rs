@@ -1431,6 +1431,46 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 info!("Actions command - no-op, returning void");
                 return Ok(WebDriverResponse::Void);
             },
+            TakeScreenshot => {
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                let response = server_request_for_platform(session_id, &platform, "screenshot", &std::collections::HashMap::new());
+                // WebDriver spec requires base64-encoded PNG data
+                return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(response))));
+            },
+            TakeElementScreenshot(element_ref) => {
+                let script_body = r#"
+                if (!window.__webdriver_script_results) {
+                    return null;
+                }
+                for (const [el, id] of window.__webdriver_script_results) {
+                    if (id === elementId) {
+                        const rect = el.getBoundingClientRect();
+                        return JSON.stringify({
+                            x: Math.round(rect.x),
+                            y: Math.round(rect.y),
+                            width: Math.round(rect.width),
+                            height: Math.round(rect.height)
+                        });
+                    }
+                }
+                return null;
+                "#;
+                let script = [
+                    format!("let elementId = '{}';", &element_ref),
+                    script_body.to_string(),
+                ].join(" ");
+                let script = urlencoding::encode(&script).to_string();
+                let mut params = std::collections::HashMap::new();
+                params.insert("script", script.as_str());
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                let rect_response = server_request_for_platform(session_id, &platform, "execute", &params);
+                
+                // Parse the rect JSON and pass to screenshot endpoint
+                let mut screenshot_params = std::collections::HashMap::new();
+                screenshot_params.insert("rect", rect_response.as_str());
+                let response = server_request_for_platform(session_id, &platform, "screenshot", &screenshot_params);
+                return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(response))));
+            },
             _ => {
                 info!("Unhandled command: {:?}", msg.command);
                 Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)))

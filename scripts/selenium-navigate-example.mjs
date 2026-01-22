@@ -1,5 +1,4 @@
 import { createRequire } from 'node:module';
-import http from 'http';
 
 const localRequire = createRequire(import.meta.url);
 
@@ -34,7 +33,7 @@ async function cleanupExistingSessions() {
                     }
                 }
                 // Give the server a moment to clean up
-                await new Promise(resolve => setTimeout(resolve, 500));
+                await new Promise((resolve) => setTimeout(resolve, 500));
             }
         }
     } catch (e) {
@@ -49,7 +48,7 @@ await cleanupExistingSessions();
 let driver;
 try {
     driver = await new selenium.Builder().usingServer(serverUrl).withCapabilities({ browserName: 'duckduckgo' }).build();
-    
+
     // Try to detect platform by checking if we can access automation server directly
     // (macOS automation server runs on port 8788, iOS uses simulator logs)
     if (expectedPlatform === 'macos') {
@@ -64,7 +63,7 @@ try {
             console.warn('   Make sure you ran: npm run driver:macos (not driver:ios)');
         }
     }
-    
+
     await driver.get(url);
     const title = await driver.getTitle();
     console.log(JSON.stringify({ ok: true, url, title }));

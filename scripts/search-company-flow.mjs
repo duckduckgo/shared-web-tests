@@ -31,7 +31,7 @@ async function cleanupExistingSessions() {
                         // Ignore errors during cleanup
                     }
                 }
-                await new Promise(resolve => setTimeout(resolve, 500));
+                await new Promise((resolve) => setTimeout(resolve, 500));
             }
         }
     } catch (e) {
@@ -42,7 +42,7 @@ async function cleanupExistingSessions() {
 // Fill out the checkout form
 async function fillCheckoutForm(driver) {
     console.log('\n📝 Filling out checkout form...');
-    
+
     const fields = [
         { id: 'cc-name', value: 'John Test', label: 'Cardholder Name' },
         { id: 'cc-number', value: '4111111111111111', label: 'Card Number' },
@@ -50,7 +50,7 @@ async function fillCheckoutForm(driver) {
         { id: 'cc-exp-year', value: '2028', label: 'Expiry Year' },
         { id: 'cc-csc', value: '123', label: 'CSC' },
     ];
-    
+
     for (const field of fields) {
         try {
             const input = await driver.findElement(By.id(field.id));
@@ -61,7 +61,7 @@ async function fillCheckoutForm(driver) {
             console.warn(`   ✗ Failed to fill ${field.label}:`, e.message);
         }
     }
-    
+
     // Click the Pay button
     try {
         const payButton = await driver.findElement(By.id('pay-button'));
@@ -85,13 +85,13 @@ async function waitForPageReady(driver, timeout = 10000) {
             const readyState = await driver.executeScript('return document.readyState');
             if (readyState === 'complete') {
                 // Small extra wait for dynamic JS content
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await new Promise((resolve) => setTimeout(resolve, 1000));
                 return true;
             }
         } catch (e) {
             // Script execution failed, wait and retry
         }
-        await new Promise(resolve => setTimeout(resolve, 200));
+        await new Promise((resolve) => setTimeout(resolve, 200));
     }
     console.warn('Page ready timeout');
     return false;
@@ -100,15 +100,15 @@ async function waitForPageReady(driver, timeout = 10000) {
 // Find all link elements on the page
 async function findLinks(driver) {
     const clickables = [];
-    
+
     try {
         const links = await driver.findElements(By.css('a[href]'));
-        
+
         for (const link of links) {
             try {
                 const href = await link.getAttribute('href');
                 const text = await link.getText();
-                
+
                 // Filter out javascript: and # links
                 if (href && !href.startsWith('javascript:') && !href.startsWith('#')) {
                     clickables.push({ element: link, type: 'link', href, text: text || href });
@@ -120,7 +120,7 @@ async function findLinks(driver) {
     } catch (e) {
         console.warn('Error finding links:', e.message);
     }
-    
+
     return clickables;
 }
 
@@ -130,13 +130,13 @@ async function clickThroughFlow(driver, startUrl) {
     const maxPages = 20; // Safety limit
     let currentUrl = startUrl;
     let pageCount = 0;
-    
+
     console.log(`\nStarting flow from: ${startUrl}\n`);
-    
+
     while (pageCount < maxPages) {
         pageCount++;
         console.log(`\nPage ${pageCount}: ${currentUrl}`);
-        
+
         // Navigate to current URL
         try {
             await driver.get(currentUrl);
@@ -145,7 +145,7 @@ async function clickThroughFlow(driver, startUrl) {
             console.error(`Failed to load ${currentUrl}:`, e.message);
             break;
         }
-        
+
         // Get current URL after navigation (may have changed)
         try {
             currentUrl = await driver.getCurrentUrl();
@@ -154,7 +154,7 @@ async function clickThroughFlow(driver, startUrl) {
             console.error('Failed to get current URL:', e.message);
             break;
         }
-        
+
         // Get page title
         try {
             const title = await driver.getTitle();
@@ -162,21 +162,21 @@ async function clickThroughFlow(driver, startUrl) {
         } catch (e) {
             // Ignore title errors
         }
-        
+
         // Find links on the page
         const links = await findLinks(driver);
         console.log(`   Found ${links.length} link(s)`);
-        
+
         if (links.length === 0) {
             console.log('No links found. Flow complete!');
             break;
         }
-        
+
         // List available links
         for (const link of links) {
             console.log(`     - ${link.text || '(no text)'}: ${link.href}`);
         }
-        
+
         // Find a link that leads to a new page (not already visited)
         let clicked = false;
         for (const link of links) {
@@ -184,10 +184,10 @@ async function clickThroughFlow(driver, startUrl) {
                 const targetUrl = new URL(link.href, currentUrl).href;
                 const normalizedTarget = targetUrl.split('#')[0];
                 const normalizedCurrent = currentUrl.split('#')[0];
-                
+
                 if (normalizedTarget !== normalizedCurrent && !visitedUrls.has(normalizedTarget)) {
                     console.log(`   Clicking: "${link.text || link.href}"`);
-                    
+
                     // Check for target="_blank" which opens in new tab
                     let linkTarget = null;
                     try {
@@ -195,7 +195,7 @@ async function clickThroughFlow(driver, startUrl) {
                     } catch (e) {
                         // Ignore attribute errors
                     }
-                    
+
                     if (linkTarget === '_blank') {
                         // Navigate directly instead of clicking (new tab links won't work)
                         console.log(`   (target="_blank" detected, navigating directly)`);
@@ -204,7 +204,7 @@ async function clickThroughFlow(driver, startUrl) {
                         await link.element.click();
                     }
                     await waitForPageReady(driver);
-                    
+
                     // Verify navigation
                     const newUrl = await driver.getCurrentUrl();
                     const normalizedNew = newUrl.split('#')[0];
@@ -221,7 +221,7 @@ async function clickThroughFlow(driver, startUrl) {
                 continue;
             }
         }
-        
+
         if (!clicked) {
             // Check if we're on checkout page and should fill the form
             if (currentUrl.includes('checkout')) {
@@ -236,11 +236,11 @@ async function clickThroughFlow(driver, startUrl) {
             break;
         }
     }
-    
+
     if (pageCount >= maxPages) {
         console.log(`\nReached maximum page limit (${maxPages}). Stopping.`);
     }
-    
+
     console.log(`\nSummary:`);
     console.log(`   Pages visited: ${visitedUrls.size}`);
     console.log(`   URLs:`);
@@ -254,7 +254,7 @@ await cleanupExistingSessions();
 let driver;
 try {
     driver = await new selenium.Builder().usingServer(serverUrl).withCapabilities({ browserName: 'duckduckgo' }).build();
-    
+
     if (expectedPlatform === 'macos') {
         try {
             const automationCheck = await fetch('http://localhost:8788/getUrl');
@@ -267,9 +267,9 @@ try {
             console.warn('   Make sure you ran: npm run driver:macos (not driver:ios)');
         }
     }
-    
+
     await clickThroughFlow(driver, url);
-    
+
     if (keepOpen) {
         console.log('\n✅ Browser will stay open. Press Ctrl+C to quit.');
         await new Promise(() => {});

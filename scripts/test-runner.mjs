@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 /**
  * Unified WebDriver Test Runner
- * 
+ *
  * Composes npm scripts: cleanup → driver:macos → driver:wait → test → cleanup
- * 
+ *
  * Usage:
  *   node scripts/test-runner.mjs                    # Run search-company test
  *   node scripts/test-runner.mjs --check            # Check environment only (no test)
@@ -15,8 +15,8 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const rootDir = join(__dirname, '..');
+const scriptsDir = dirname(fileURLToPath(import.meta.url));
+const rootDir = join(scriptsDir, '..');
 
 // Parse args
 const args = process.argv.slice(2);
@@ -36,36 +36,36 @@ function log(msg, ...rest) {
 }
 
 function sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function npmRun(script, options = {}) {
     const { silent = false, background = false } = options;
-    const stdio = silent ? 'ignore' : (verbose ? 'inherit' : 'pipe');
-    
+    const stdio = silent ? 'ignore' : verbose ? 'inherit' : 'pipe';
+
     if (background) {
         const child = spawn('npm', ['run', script], {
             cwd: rootDir,
             stdio: 'ignore',
             detached: true,
-            env: { ...process.env, TARGET_PLATFORM: 'macos' }
+            env: { ...process.env, TARGET_PLATFORM: 'macos' },
         });
         child.unref();
         return { status: 0 };
     }
-    
+
     const result = spawnSync('npm', ['run', script], {
         cwd: rootDir,
         stdio,
-        env: { ...process.env, TARGET_PLATFORM: 'macos' }
+        env: { ...process.env, TARGET_PLATFORM: 'macos' },
     });
     return result;
 }
 
 async function isDriverReady() {
     try {
-        const response = await fetch(`http://localhost:${DRIVER_PORT}/status`, { 
-            signal: AbortSignal.timeout(1000) 
+        const response = await fetch(`http://localhost:${DRIVER_PORT}/status`, {
+            signal: AbortSignal.timeout(1000),
         });
         return response.ok;
     } catch {
@@ -128,17 +128,17 @@ async function main() {
 
     // Always check environment first
     const status = await checkEnvironment();
-    
+
     if (checkOnly) {
         printStatus(status);
-        
+
         if (!status.driverBinaryExists || !status.macosAppExists) {
             console.log('⚠️  Missing prerequisites. Build with:');
             if (!status.driverBinaryExists) console.log('   npm run build-rust');
             if (!status.macosAppExists) console.log('   npm run build:macos');
             process.exit(1);
         }
-        
+
         process.exit(0);
     }
 
@@ -184,11 +184,11 @@ async function main() {
     const testArgs = [];
     if (noKeep) testArgs.push('--no-keep');
     else if (!keep) testArgs.push('--no-keep'); // Default to --no-keep for automation
-    
+
     const testResult = spawnSync('node', [testScriptPath, ...testArgs], {
         cwd: rootDir,
         stdio: 'inherit',
-        env: { ...process.env, PLATFORM: 'macos' }
+        env: { ...process.env, PLATFORM: 'macos' },
     });
 
     // Step 5: Cleanup after test
@@ -204,7 +204,7 @@ async function main() {
     }
 }
 
-main().catch(err => {
+main().catch((err) => {
     console.error('Fatal error:', err);
     process.exit(1);
 });

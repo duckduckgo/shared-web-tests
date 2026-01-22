@@ -1,7 +1,7 @@
-if (document.readyState != 'complete') {
+if (document.readyState !== 'complete') {
     return new Promise((resolve) => {
         window.addEventListener('load', async () => {
-            let scriptResponse = await runScript();
+            const scriptResponse = await runScript();
             resolve(scriptResponse);
         });
     });
@@ -41,9 +41,8 @@ function selectElements(using, selector) {
             return Array.from(document.getElementsByName(selector));
         default:
             throw new Error('Unsupported locator strategy: ' + using);
-    } 
+    }
 }
-
 
 function runScript() {
     return new Promise((resolve, reject) => {
@@ -65,54 +64,56 @@ function runScript() {
                 console.log('FindElements: using=' + using + ', value=' + value);
                 console.log('FindElements: document.readyState=' + document.readyState);
                 console.log('FindElements: document.body exists=' + (document.body !== null));
-                let elements = selectElements(using, value);
-            console.log('FindElements: found ' + elements.length + ' elements');
-            if (elements.length > 0 || attempts >= 5) {
-            if (elements.length === 0 && attempts >= 5) {
-                // Return debug info if no elements found after retries
-                // Try direct querySelectorAll to see if selector works
-                let directResult = 0;
-                try {
-                    if (document.querySelectorAll) {
-                        directResult = document.querySelectorAll(value).length;
+                const elements = selectElements(using, value);
+                console.log('FindElements: found ' + elements.length + ' elements');
+                if (elements.length > 0 || attempts >= 5) {
+                    if (elements.length === 0 && attempts >= 5) {
+                        // Return debug info if no elements found after retries
+                        // Try direct querySelectorAll to see if selector works
+                        let directResult = 0;
+                        try {
+                            if (document.querySelectorAll) {
+                                directResult = document.querySelectorAll(value).length;
+                            }
+                        } catch (e) {
+                            directResult = 'error: ' + e.message;
+                        }
+                        const debugInfo = {
+                            error: 'No elements found after 5 attempts',
+                            using: typeof using === 'undefined' ? 'undefined' : using,
+                            value: typeof value === 'undefined' ? 'undefined' : value,
+                            readyState: document.readyState,
+                            bodyExists: document.body !== null,
+                            directQueryResult: directResult,
+                            url: window.location.href,
+                            buttonCount: document.querySelectorAll ? document.querySelectorAll('button').length : 'N/A',
+                            inputButtonCount: document.querySelectorAll
+                                ? document.querySelectorAll('input[type="button"], input[type="submit"]').length
+                                : 'N/A',
+                        };
+                        console.error('FindElements debug:', JSON.stringify(debugInfo));
+                        // Still return empty array as per WebDriver spec
+                        resolve([]);
+                        return;
                     }
-                } catch (e) {
-                    directResult = 'error: ' + e.message;
-                }
-                const debugInfo = {
-                    error: 'No elements found after 5 attempts',
-                    using: typeof using === 'undefined' ? 'undefined' : using,
-                    value: typeof value === 'undefined' ? 'undefined' : value,
-                    readyState: document.readyState,
-                    bodyExists: document.body !== null,
-                    directQueryResult: directResult,
-                    url: window.location.href,
-                    buttonCount: document.querySelectorAll ? document.querySelectorAll('button').length : 'N/A',
-                    inputButtonCount: document.querySelectorAll ? document.querySelectorAll('input[type="button"], input[type="submit"]').length : 'N/A'
-                };
-                console.error('FindElements debug:', JSON.stringify(debugInfo));
-                // Still return empty array as per WebDriver spec
-                resolve([]);
-                return;
-            }
-                if (!window.__webdriver_script_results) {
-                    // TODO make a WeakMap and handle references to elements with WeakRef or a similar mechanism
-                    window.__webdriver_script_results = new Map();
-                }
-                let uuids = [];
-                for (let element of elements) {
-                    let uuid;
-                    if (window.__webdriver_script_results.has(element)) {
-                        uuid = window.__webdriver_script_results.get(element);
-                    } else {
-                        uuid = window.crypto.randomUUID();
-                        window.__webdriver_script_results.set(element, uuid);
+                    if (!window.__webdriver_script_results) {
+                        // TODO make a WeakMap and handle references to elements with WeakRef or a similar mechanism
+                        window.__webdriver_script_results = new Map();
                     }
-                    uuids.push(uuid);
+                    const uuids = [];
+                    for (const element of elements) {
+                        let uuid;
+                        if (window.__webdriver_script_results.has(element)) {
+                            uuid = window.__webdriver_script_results.get(element);
+                        } else {
+                            uuid = window.crypto.randomUUID();
+                            window.__webdriver_script_results.set(element, uuid);
+                        }
+                        uuids.push(uuid);
+                    }
+                    resolve(uuids);
+                    return;
                 }
-                resolve(uuids);
-                return;
-            }
                 attempts++;
                 const delay = Math.min(10 * Math.pow(2, attempts), 16000);
                 setTimeout(findElements, delay);

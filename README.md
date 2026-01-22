@@ -6,7 +6,6 @@ We repackage a few tests and rebuild the manifest.
 
 ## Test format
 
-
 ## Running the test server
 
 To start the example test server run the following command:
@@ -64,12 +63,13 @@ See more details: https://web-platform-tests.org/tools/certs/README.html
 The client will need to import this root ca to be able to trust the server.
 
 For Apple devices this can be done by running the following command:
+
 ```bash
 xcrun simctl keychain booted add-root-cert  path/to/shared-web-tests/web-platform-tests/tools/certs/cacert.pem
 ```
 
-
 Getting logs from the emulator:
+
 ```bash
 xcrun simctl spawn booted log show --last 900m --info --debug --predicate 'subsystem == "com.duckduckgo.mobile.ios"' --style compact
 ```
@@ -192,6 +192,7 @@ TARGET_PLATFORM=macos ./build/wpt run --product duckduckgo --binary webdriver/ta
 ### macOS App Setup Requirements
 
 The macOS app must include the automation server. Ensure these files are added to the Xcode project's macOS target:
+
 - `macOS/DuckDuckGo/LaunchOptionsHandler.swift`
 - `macOS/DuckDuckGo/Automation/AutomationServer.swift`
 

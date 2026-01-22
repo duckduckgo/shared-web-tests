@@ -1,7 +1,7 @@
-if (document.readyState != 'complete') {
+if (document.readyState !== 'complete') {
     return new Promise((resolve) => {
         window.addEventListener('load', async () => {
-            let scriptResponse = await runScript();
+            const scriptResponse = await runScript();
             resolve(scriptResponse);
         });
     });
@@ -15,6 +15,7 @@ function selectElement(using, selector) {
             return document.querySelector(selector);
         case 'link text':
             selector = `//a[contains(text(), '${selector}')]`;
+        // fallthrough
         case 'xpath':
             return document.evaluate(selector, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue;
         case 'tag name':
@@ -25,15 +26,14 @@ function selectElement(using, selector) {
             return document.getElementsByName(selector)[0] || null;
         default:
             throw new Error('Unsupported locator strategy: ' + using);
-    } 
+    }
 }
-
 
 function runScript() {
     return new Promise((resolve, reject) => {
         let attempts = 0;
         function findElement() {
-            let element = selectElement(using, value);
+            const element = selectElement(using, value);
             if (element !== null || attempts >= 5) {
                 if (element === null) {
                     reject(new Error('Element not found after 5 attempts'));

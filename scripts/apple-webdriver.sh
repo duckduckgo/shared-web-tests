@@ -7,8 +7,12 @@ set -e
 #   ./scripts/apple-webdriver.sh driver [ios|macos] [path]   - Start ddgdriver (run in separate terminal)
 #   ./scripts/apple-webdriver.sh example [--keep] [url]      - Run the example test (--keep keeps browser open)
 #   ./scripts/apple-webdriver.sh test [ios|macos]            - Run the full test suite
+#
+# Environment:
+#   WEBDRIVER_PORT - Port for ddgdriver (default: 4444)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+WEBDRIVER_PORT="${WEBDRIVER_PORT:-4444}"
 SHARED_WEB_TESTS_DIR="$(dirname "$SCRIPT_DIR")"
 REPO_ROOT="$(dirname "$SHARED_WEB_TESTS_DIR")"
 
@@ -70,7 +74,7 @@ case "${1:-help}" in
         if [ "$PLATFORM" = "macos" ]; then
             # Build macOS app
             echo "⏲️ Building macOS app"
-            set -o pipefail && xcodebuild -project macOS/DuckDuckGo-macOS.xcodeproj \
+            set -o pipefail && xcodebuild -workspace DuckDuckGo.xcworkspace \
                                           -scheme "macOS Browser" \
                                           -derivedDataPath "$DERIVED_DATA_PATH" \
                                           -skipPackagePluginValidation \
@@ -131,7 +135,7 @@ case "${1:-help}" in
             fi
         fi
         
-        echo "Starting ddgdriver on port 4444 for $PLATFORM..."
+        echo "Starting ddgdriver on port $WEBDRIVER_PORT for $PLATFORM..."
         echo "DERIVED_DATA_PATH=$DERIVED_DATA_PATH"
         if [ "$PLATFORM" = "macos" ]; then
             export MACOS_APP_PATH="$APP_PATH"
@@ -184,13 +188,13 @@ case "${1:-help}" in
             exec env TARGET_PLATFORM="$TARGET_PLATFORM" \
                 MACOS_APP_PATH="$MACOS_APP_PATH" \
                 DERIVED_DATA_PATH="$DERIVED_DATA_PATH" \
-                ./target/debug/ddgdriver --port 4444
+                ./target/debug/ddgdriver --port "$WEBDRIVER_PORT"
         else
             # For iOS, make sure TARGET_PLATFORM is not set
             exec env -u TARGET_PLATFORM \
                 -u MACOS_APP_PATH \
                 DERIVED_DATA_PATH="$DERIVED_DATA_PATH" \
-                ./target/debug/ddgdriver --port 4444
+                ./target/debug/ddgdriver --port "$WEBDRIVER_PORT"
         fi
         ;;
 

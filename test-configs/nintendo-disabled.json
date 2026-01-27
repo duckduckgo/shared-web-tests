@@ -1,0 +1,64 @@
+{
+    "features": {
+        "contentBlocking": {
+            "state": "enabled",
+            "exceptions": [
+                {
+                    "domain": "nintendo.com",
+                    "reason": "Testing checkout flow"
+                }
+            ]
+        },
+        "cookie": {
+            "state": "enabled",
+            "exceptions": [
+                {
+                    "domain": "nintendo.com",
+                    "reason": "Testing checkout flow"
+                }
+            ]
+        },
+        "trackerAllowlist": {
+            "state": "enabled",
+            "settings": {
+                "allowlistedTrackers": {}
+            }
+        },
+        "gpc": {
+            "state": "enabled",
+            "exceptions": [
+                {
+                    "domain": "nintendo.com",
+                    "reason": "Testing checkout flow"
+                }
+            ]
+        },
+        "referrer": {
+            "state": "disabled"
+        },
+        "autofill": {
+            "state": "enabled",
+            "exceptions": [
+                {
+                    "domain": "nintendo.com",
+                    "reason": "Testing checkout flow"
+                }
+            ]
+        },
+        "autoconsent": {
+            "state": "enabled",
+            "exceptions": [
+                {
+                    "domain": "nintendo.com",
+                    "reason": "Testing checkout flow"
+                }
+            ]
+        }
+    },
+    "unprotectedTemporary": [
+        {
+            "domain": "nintendo.com",
+            "reason": "Testing checkout flow - disables all protections"
+        }
+    ]
+}

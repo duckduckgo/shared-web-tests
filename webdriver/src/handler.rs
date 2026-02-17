@@ -160,52 +160,6 @@ fn get_port(udid: &str) -> u16 {
     port_manager.get_port(udid)
 }
 
-fn server_request(udid: &str, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
-    let mut child = monitor_simulator_logs(&udid);
-    let stdout = child.stdout.take().expect("Failed to capture stdout");
-    thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        info!("Simulator logs:");
-        for line in reader.lines() {
-            if let Ok(log_line) = line {
-                info!("{}", log_line);
-            }
-        }
-        info!("Simulator logs end");
-    });
-    let port = get_port(udid);
-    let query_string: String = params.iter()
-        .map(|(key, value)| format!("{}={}", key, value))
-        .collect::<Vec<String>>()
-        .join("&");
-    let url = format!("http://localhost:{}/{method}?{}", port, query_string);
-    info!("URL to send: {:?}", url);
-    let client = reqwest::blocking::Client::new();
-    let resp = client.get(url)
-        .timeout(std::time::Duration::from_secs(30)) // TODO Handle variadic timeout set by command
-        .send()
-        .map_err(|e| {
-            if e.is_timeout() {
-            info!("Request timed out");
-            // TODO construct serialised error like: Error::new(ErrorKind::TimedOut, "Request timed out")
-            "Request timed out".to_string()
-            } else {
-            "Other error".to_string()
-            }
-        })
-        .expect("Failed to send request")
-        .text()
-        .expect("Failed to read response text");
-    info!("Response: {:#?}", resp);
-    #[derive(Deserialize)]
-    struct Response {
-        message: String,
-    }
-    let json: Response = serde_json::from_str(&resp).expect("Failed to parse response");
-    let _ = child.kill();
-    return json.message;
-}
-
 fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<String, String> {
     // Step 1: List existing simulators
     let list_output = xcrun_command(&["simctl", "list", "devices", "-j"]);

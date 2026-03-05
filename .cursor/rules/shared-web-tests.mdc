@@ -1,0 +1,298 @@
+# Shared Web Tests Repository
+
+## What This Repo Does
+
+This repository provides WebDriver testing infrastructure for DuckDuckGo browsers (iOS & macOS). It includes:
+- A Rust-based WebDriver server (`ddgdriver`) that communicates with Apple browsers via automation servers
+- Test utilities and example scripts for Selenium-based testing
+- Integration with web-platform-tests (WPT) for cross-browser compatibility testing
+
+## Quick Start - Running Example Scripts
+
+### Setup (First Time)
+```bash
+# Install dependencies
+npm install
+
+# Build the WebDriver binary
+npm run build-rust
+
+# Build the Apple browser app (iOS or macOS)
+npm run build:ios      # or npm run build:macos
+```
+
+### Running Tests
+
+**Two-terminal workflow:**
+
+```bash
+# Terminal 1: Start the WebDriver server
+npm run driver:ios     # or npm run driver:macos
+
+# Terminal 2: Run example test (must match platform from Terminal 1!)
+npm run example        # defaults to iOS
+npm run example:macos  # for macOS
+npm run example:ios    # explicit iOS
+```
+
+**Example with custom URL:**
+```bash
+./scripts/apple-webdriver.sh example ios https://duckduckgo.com
+./scripts/apple-webdriver.sh example macos https://duckduckgo.com --no-keep
+```
+
+**Direct script execution:**
+```bash
+node scripts/selenium-navigate-example.mjs https://example.com --keep
+```
+
+## Critical Debugging Steps
+
+### 1. Check Simulator/App Logs
+
+**iOS Simulator logs:**
+```bash
+xcrun simctl spawn booted log show --last 900m --info --debug \
+  --predicate 'subsystem == "com.duckduckgo.mobile.ios"' \
+  --style compact
+```
+
+**macOS app logs:**
+- Check Console.app for DuckDuckGo browser logs
+- Look for automation server errors (port 8788)
+- Check for "Invalid device" errors in logs
+
+**WebDriver output:**
+- The WebDriver server prints detailed logs including:
+  - Simulator logs (prefixed with "Simulator logs:")
+  - Request/response details
+  - Element finding results
+
+### 2. Recompile WebDriver After Code Changes
+
+**After modifying Rust code (`webdriver/src/*.rs`):**
+```bash
+cd webdriver
+cargo build
+# Or from repo root:
+npm run build-rust
+```
+
+**After modifying JavaScript files (`webdriver/src/*.js`):**
+- JavaScript files are embedded at compile time
+- **Must rebuild** the Rust binary: `npm run build-rust`
+
+**After modifying automation server code (in apple-browsers):**
+- Rebuild the app: `npm run build:ios` or `npm run build:macos`
+- Restart the WebDriver server
+
+### 3. Common Issues & Solutions
+
+**"Invalid device" error in logs:**
+- Check session ID matches between WebDriver and automation server
+- Verify the app is running and automation server is active
+- Restart both the app and WebDriver server
+
+**Empty element arrays from FindElements:**
+- Verify JavaScript variables (`using`, `value`) are defined in the script context
+- Check if page is fully loaded (script waits for `document.readyState === 'complete'`)
+- Verify CSS selectors work in browser DevTools
+- Check `webdriver/KNOWN_ISSUES.md` for current issues
+
+**Session already exists:**
+- Stop the WebDriver server (Ctrl+C)
+- Restart: `npm run driver:ios` or `npm run driver:macos`
+- Or cleanup existing sessions programmatically
+
+**Port conflicts:**
+- WebDriver default: port 4444
+- macOS automation server: port 8788
+- Ensure ports are not in use: `lsof -i :4444` or `lsof -i :8788`
+
+### 4. Manual Testing & Verification
+
+**Test automation server directly (macOS):**
+```bash
+curl "http://localhost:8788/getUrl"
+curl "http://localhost:8788/navigate?url=https://example.com"
+```
+
+**Verify WebDriver server is running:**
+```bash
+curl http://localhost:4444/status
+curl http://localhost:4444/sessions
+```
+
+**Check app paths:**
+- iOS: `$DERIVED_DATA_PATH/Build/Products/Debug-iphonesimulator/DuckDuckGo.app`
+- macOS: `$DERIVED_DATA_PATH/Build/Products/Debug/DuckDuckGo.app`
+- Or set `MACOS_APP_PATH` env var explicitly
+
+### 5. Environment Variables
+
+- `APPLE_BROWSERS_DIR` - Path to apple-browsers repo (default: `../apple-browsers`)
+- `DERIVED_DATA_PATH` - Path to DerivedData with built app
+- `MACOS_APP_PATH` - Explicit path to macOS app bundle
+- `TARGET_PLATFORM` - `ios` or `macos` (affects which app to use)
+- `PLATFORM` - Platform override
+- `WEBDRIVER_SERVER_URL` - WebDriver server URL (default: `http://localhost:4444`)
+
+## File Structure
+
+- `webdriver/` - Rust WebDriver server implementation
+  - `src/handler.rs` - WebDriver command handlers
+  - `src/find-element.js` - Single element finding script
+  - `src/find-elements.js` - Multiple elements finding script
+- `scripts/` - Test scripts and utilities
+  - `selenium-navigate-example.mjs` - Basic navigation example
+  - `apple-webdriver.sh` - Build/driver/test orchestration script
+- `web-platform-tests/` - WPT submodule (large, gitignored in some contexts)
+
+## Important Notes
+
+- **Always rebuild WebDriver** after modifying Rust or JavaScript code
+- **Check simulator logs** when debugging element finding or navigation issues
+- **Match platform** between driver and example commands (iOS vs macOS)
+- The WebDriver server must be running before executing test scripts
+- Browser stays open by default; use `--no-keep` to auto-close
+
+## Agent Instructions for Running WebDriver Tests
+
+### MANDATORY Preflight Checklist (do this BEFORE any test)
+
+**Step 1: Clean environment first**
+```bash
+npm run driver:cleanup   # Cleans sessions, kills stale processes, quits macOS app
+```
+
+**Step 2: Start driver (in background terminal or with `&`)**
+```bash
+npm run driver:macos &   # or driver:ios
+npm run driver:wait      # Wait up to 60s for driver ready
+```
+
+**Step 3: Run your test**
+```bash
+npm run test:search-company -- --no-keep
+```
+
+### Simplified One-Line Commands (preferred)
+
+```bash
+# Full automatic: cleanup → start driver → wait → run test → cleanup
+npm run test:search-company:auto
+
+# Restart driver only (keeps app state)
+npm run driver:restart:macos   # or driver:restart:ios
+
+# Force kill everything (use if graceful cleanup fails)
+npm run driver:kill
+```
+
+### CRITICAL: Rebuild After Code Changes
+
+**After modifying `webdriver/src/*.rs` or `webdriver/src/*.js`:**
+```bash
+npm run build-rust   # JS files are embedded at compile time!
+```
+Then restart the driver: `npm run driver:restart:macos`
+
+**After modifying apple-browsers automation server code:**
+```bash
+npm run build:macos   # Rebuild the app
+npm run driver:restart:macos
+```
+
+### Handling the "DuckDuckGo quit unexpectedly" Dialog
+
+This crash dialog appears when:
+1. The driver process was killed without cleanly closing the browser
+2. The macOS app didn't respond to graceful quit signals
+
+**Prevention:**
+- Always use `npm run driver:cleanup` before starting tests
+- Always pass `--no-keep` to auto-close the browser when test ends
+- Use `npm run test:search-company:auto` which handles cleanup
+
+**Recovery:**
+```bash
+npm run driver:kill        # Force kill everything
+# Click "Ignore" on the crash dialog if it appears
+npm run driver:macos       # Start fresh
+```
+
+### Taking Screenshots for Debugging
+
+The WebDriver supports taking screenshots of the current page state - useful for debugging test failures or capturing visual evidence.
+
+**Quick screenshot during test:**
+```bash
+# Run search-company flow with screenshot at end
+npm run test:search-company -- --screenshot --no-keep
+
+# Screenshots saved to: shared-web-tests/screenshots/
+```
+
+**Programmatic screenshot in test code:**
+```javascript
+import { writeFile } from 'node:fs/promises';
+
+// Take full page screenshot
+const screenshotBase64 = await driver.takeScreenshot();
+
+// Save to file
+const buffer = Buffer.from(screenshotBase64, 'base64');
+await writeFile('debug-screenshot.png', buffer);
+```
+
+**Element screenshot (capture specific element):**
+```javascript
+const element = await driver.findElement(By.css('.my-selector'));
+const elementScreenshot = await element.takeScreenshot();
+```
+
+**When to use screenshots:**
+- Test is failing and you need to see the page state
+- Verifying visual state at specific points in a flow
+- Documenting browser behavior for bug reports
+- Capturing blocked tracker lists or privacy UI state
+
+**Screenshot location:**
+- Default: `shared-web-tests/screenshots/`
+- Filename format: `search-company-final-{timestamp}.png`
+
+### Common WebDriver Issues
+
+**Port 4444 already in use:**
+```bash
+npm run driver:cleanup   # Preferred: cleans up properly
+# or force: npm run driver:kill
+```
+
+**Session already started errors:**
+```bash
+npm run driver:cleanup   # Deletes all sessions and restarts
+```
+
+**target="_blank" links:**
+- Links with `target="_blank"` open new tabs, not navigate current page
+- Solution: Use `driver.get(href)` instead of `element.click()` for such links
+- Detection: Check `await element.getAttribute('target')` before clicking
+
+**Element not found:**
+- Page may still be loading
+- Use `waitForPageReady(driver)` helper before finding elements
+- Verify selectors work in browser DevTools first
+
+**Click doesn't navigate:**
+- Element may be obscured, or link has `target="_blank"`
+- Check WebDriver logs for "clicked" responses without URL change
+- Try direct navigation: `driver.get(targetUrl)` instead of clicking
+
+### WebDriver Commands Not Implemented
+
+If a Selenium method silently fails (returns null), check `webdriver/src/handler.rs` for the command implementation. Common missing commands fall through to the default case and return null.
+
+**Currently implemented:** NewSession, DeleteSession, Get, FindElement, FindElements, ElementClick, ElementSendKeys, ElementClear, ExecuteScript, ExecuteAsyncScript, GetCurrentUrl, GetTitle, GetPageSource, GetWindowHandle, GetWindowHandles, NewWindow, CloseWindow, SwitchToWindow, TakeScreenshot
+
+**To add a new command:** Add handler in `handler.rs`, rebuild with `npm run build-rust`

@@ -6,7 +6,6 @@ We repackage a few tests and rebuild the manifest.
 
 ## Test format
 
-
 ## Running the test server
 
 To start the example test server run the following command:
@@ -64,28 +63,139 @@ See more details: https://web-platform-tests.org/tools/certs/README.html
 The client will need to import this root ca to be able to trust the server.
 
 For Apple devices this can be done by running the following command:
+
 ```bash
 xcrun simctl keychain booted add-root-cert  path/to/shared-web-tests/web-platform-tests/tools/certs/cacert.pem
 ```
 
-
 Getting logs from the emulator:
+
 ```bash
 xcrun simctl spawn booted log show --last 900m --info --debug --predicate 'subsystem == "com.duckduckgo.mobile.ios"' --style compact
 ```
 
-Building the iOS test build:
+## Apple WebDriver Testing (iOS & macOS)
+
+### Quick Start
+
 ```bash
-source .maestro/common.sh && build_app
+# Terminal 1: Build the app (first time or after code changes)
+npm run build:ios      # or npm run build:macos
+
+# Terminal 1: Start the WebDriver server
+npm run driver:ios     # or npm run driver:macos
+
+# Terminal 2: Run the example test (must match the platform from Terminal 1!)
+npm run example        # defaults to iOS, or use npm run example:ios / npm run example:macos
+
+# ⚠️ Important: The example command connects to whatever driver is running.
+# Make sure you run the matching platform driver and example commands!
+# Default is iOS - use npm run example:macos for macOS.
+
+# Or run the full test suite
+npm run test:ios       # or npm run test:macos
 ```
 
-Building the web driver API:
+### Options
+
+```bash
+# Build from a different apple-browsers location
+./scripts/apple-webdriver.sh build ios /path/to/apple-browsers
+./scripts/apple-webdriver.sh build macos /path/to/apple-browsers
+
+# Browser stays open by default (use --no-keep to close automatically)
+./scripts/apple-webdriver.sh example ios
+./scripts/apple-webdriver.sh example macos
+
+# Navigate to a specific URL
+./scripts/apple-webdriver.sh example ios https://duckduckgo.com
+./scripts/apple-webdriver.sh example macos https://duckduckgo.com
+
+# Close browser automatically after test
+./scripts/apple-webdriver.sh example macos https://duckduckgo.com --no-keep
+```
+
+### Environment Variables
+
+- `APPLE_BROWSERS_DIR` - Path to apple-browsers repo (default: `../apple-browsers`)
+- `DERIVED_DATA_PATH` - Path to DerivedData containing the built app
+- `MACOS_APP_PATH` - Path to macOS app (for macos platform)
+- `TARGET_PLATFORM` - Target platform (`ios` or `macos`)
+- `PLATFORM` - Platform override (`ios` or `macos`)
+
+### Manual Steps (if needed)
+
+Building the iOS app:
+
+```bash
+cd ../apple-browsers
+source .maestro/common.sh && build_app 1
+```
+
+The iOS app will be built to `apple-browsers/DerivedData/Build/Products/Debug-iphonesimulator/DuckDuckGo.app`
+
+Building the macOS app:
+
+```bash
+cd ../apple-browsers
+xcodebuild -project macOS/DuckDuckGo-macOS.xcodeproj \
+           -scheme "macOS Browser" \
+           -derivedDataPath DerivedData \
+           -skipPackagePluginValidation \
+           -skipMacroValidation
+```
+
+The macOS app will be built to `apple-browsers/DerivedData/Build/Products/Debug/DuckDuckGo.app`
+
+Building the WebDriver:
+
 ```bash
 cd webdriver
 cargo build
 ```
 
-Running the suite:
+Starting the driver manually:
+
 ```bash
-./wpt run  --product duckduckgo --binary ~/duckduckgo/shared-web-tests/webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info duckduckgo
+# iOS
+cd webdriver
+DERIVED_DATA_PATH="../../apple-browsers/DerivedData" ./target/debug/ddgdriver --port 4444
+
+# macOS
+cd webdriver
+MACOS_APP_PATH="../../apple-browsers/DerivedData/Build/Products/Debug/DuckDuckGo.app" \
+TARGET_PLATFORM=macos \
+DERIVED_DATA_PATH="../../apple-browsers/DerivedData" \
+./target/debug/ddgdriver --port 4444
 ```
+
+Running the example test manually:
+
+```bash
+npm run webdriver:example
+# or with options
+node scripts/selenium-navigate-example.mjs https://duckduckgo.com --keep
+```
+
+Running the full suite:
+
+```bash
+# iOS
+./build/wpt run --product duckduckgo --binary webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info duckduckgo
+
+# macOS
+source build/_venv3/bin/activate
+export MACOS_APP_PATH="/path/to/DuckDuckGo.app"
+TARGET_PLATFORM=macos ./build/wpt run --product duckduckgo --binary webdriver/target/debug/ddgdriver --log-mach - --log-mach-level info duckduckgo
+```
+
+### macOS App Setup Requirements
+
+The macOS app must include the automation server. Ensure these files are added to the Xcode project's macOS target:
+
+- `macOS/DuckDuckGo/LaunchOptionsHandler.swift`
+- `macOS/DuckDuckGo/Automation/AutomationServer.swift`
+
+The `AppDelegate.swift` must call `startAutomationServerIfNeeded()` in `applicationDidFinishLaunching`.
+
+The automation server reads `automationPort` from UserDefaults. The webdriver automatically detects the bundle ID from the app's Info.plist (handles both release `com.duckduckgo.macos.browser` and debug `com.duckduckgo.macos.browser.debug` builds).

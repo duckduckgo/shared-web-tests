@@ -1,0 +1,68 @@
+{
+    "readme": "Test config with all sites unprotected - for control testing",
+    "version": 1,
+    "features": {
+        "trackerAllowlist": {
+            "state": "enabled",
+            "settings": {
+                "allowlistedTrackers": {
+                    "ad-company.site": {
+                        "rules": [
+                            {
+                                "rule": "ad-company.site",
+                                "domains": ["<all>"],
+                                "reason": "Control test - allow all trackers"
+                            }
+                        ]
+                    },
+                    "convert.ad-company.site": {
+                        "rules": [
+                            {
+                                "rule": "convert.ad-company.site",
+                                "domains": ["<all>"],
+                                "reason": "Control test - allow all trackers"
+                            }
+                        ]
+                    },
+                    "google-analytics.com": {
+                        "rules": [
+                            {
+                                "rule": "google-analytics.com",
+                                "domains": ["<all>"],
+                                "reason": "Control test"
+                            }
+                        ]
+                    },
+                    "googletagmanager.com": {
+                        "rules": [
+                            {
+                                "rule": "googletagmanager.com",
+                                "domains": ["<all>"],
+                                "reason": "Control test"
+                            }
+                        ]
+                    },
+                    "facebook.net": {
+                        "rules": [
+                            {
+                                "rule": "facebook.net",
+                                "domains": ["<all>"],
+                                "reason": "Control test"
+                            }
+                        ]
+                    }
+                }
+            }
+        }
+    },
+    "unprotectedTemporary": [
+        {
+            "domain": "publisher-company.site",
+            "reason": "Control test - all sites unprotected"
+        },
+        {
+            "domain": "ad-company.site",
+            "reason": "Control test - all sites unprotected"
+        }
+    ]
+}

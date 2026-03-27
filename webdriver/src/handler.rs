@@ -1466,15 +1466,9 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                         info!("Checking for available tabs (iOS)...");
                         let params = std::collections::HashMap::new();
                         let handles_response = make_server_request(port, "getWindowHandles", &params);
-                        let has_tab = if let Ok(json) = serde_json::from_str::<Value>(&handles_response) {
-                            json.get("message")
-                                .and_then(|v| v.as_str())
-                                .and_then(|m| serde_json::from_str::<Vec<String>>(m).ok())
-                                .map(|h| !h.is_empty())
-                                .unwrap_or(false)
-                        } else {
-                            false
-                        };
+                        let has_tab = serde_json::from_str::<Vec<String>>(&handles_response)
+                            .map(|h| !h.is_empty())
+                            .unwrap_or(false);
                         if !has_tab {
                             info!("No tab found, creating one via newWindow...");
                             let params = std::collections::HashMap::new();
@@ -1555,7 +1549,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 let response = server_request_for_platform(session_id, &platform, "execute", &params);
                 if let Ok(json_value) = serde_json::from_str::<Value>(&response) {
-                    if json_value.get("error").is_some() {
+                    if json_value.get("error").and_then(|v| v.as_str()).is_some() {
                         info!("ExecuteScript error from automation server: {:?}", json_value);
                         return Err(webdriver::error::WebDriverError::new(
                             webdriver::error::ErrorStatus::JavascriptError,

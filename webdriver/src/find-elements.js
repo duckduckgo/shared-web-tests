@@ -96,18 +96,18 @@ function runScript() {
                         resolve([]);
                         return;
                     }
-                    if (!window.__wdsr) {
+                    if (!window.__webdriver_script_results) {
                         // TODO make a WeakMap and handle references to elements with WeakRef or a similar mechanism
-                        window.__wdsr = new Map();
+                        window.__webdriver_script_results = new Map();
                     }
                     const uuids = [];
                     for (const element of elements) {
                         let uuid;
-                        if (window.__wdsr.has(element)) {
-                            uuid = window.__wdsr.get(element);
+                        if (window.__webdriver_script_results.has(element)) {
+                            uuid = window.__webdriver_script_results.get(element);
                         } else {
                             uuid = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) { var r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); });
-                            window.__wdsr.set(element, uuid);
+                            window.__webdriver_script_results.set(element, uuid);
                         }
                         uuids.push(uuid);
                     }

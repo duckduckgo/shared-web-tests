@@ -15,8 +15,8 @@ function resolveElementRefs(args) {
     return args.map(arg => {
         if (arg && typeof arg === 'object' && arg[ELEMENT_KEY]) {
             const uuid = arg[ELEMENT_KEY];
-            if (window.__wdsr) {
-                for (const [el, id] of window.__wdsr) {
+            if (window.__webdriver_script_results) {
+                for (const [el, id] of window.__webdriver_script_results) {
                     if (id === uuid) {
                         return el;
                     }
@@ -35,15 +35,15 @@ const result = (function () {
 }).apply(null, resolvedArgs);
 
 if (result instanceof Element || result instanceof Document) {
-    if (!window.__wdsr) {
-        window.__wdsr = new Map();
+    if (!window.__webdriver_script_results) {
+        window.__webdriver_script_results = new Map();
     }
     let uuid;
-    if (window.__wdsr.has(result)) {
-        uuid = window.__wdsr.get(result);
+    if (window.__webdriver_script_results.has(result)) {
+        uuid = window.__webdriver_script_results.get(result);
     } else {
         uuid = generateUUID();
-        window.__wdsr.set(result, uuid);
+        window.__webdriver_script_results.set(result, uuid);
     }
     const elementRef = {};
     elementRef[ELEMENT_KEY] = uuid;

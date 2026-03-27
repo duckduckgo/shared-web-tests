@@ -1722,11 +1722,11 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             ElementClick(element_ref) => {
                 let script_body = r#"
                 let element;
-                if (!window.__wdsr) {
+                if (!window.__webdriver_script_results) {
                     throw new Error('No elements found');
                 }
                 // Find element by UUID
-                for (const [el, id] of window.__wdsr) {
+                for (const [el, id] of window.__webdriver_script_results) {
                     if (id === elementId) {
                         element = el;
                         break;
@@ -1752,10 +1752,10 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             },
             GetElementText(element_ref) => {
                 let script_body = r#"
-                if (!window.__wdsr) {
+                if (!window.__webdriver_script_results) {
                     return '';
                 }
-                for (const [el, id] of window.__wdsr) {
+                for (const [el, id] of window.__webdriver_script_results) {
                     if (id === elementId) {
                         return el.textContent || el.innerText || '';
                     }
@@ -1781,10 +1781,10 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             GetElementAttribute(element_ref, attr_name) => {
                 info!("GetElementAttribute called: element={}, attr={}", element_ref, attr_name);
                 let script_body = r#"
-                if (!window.__wdsr) {
+                if (!window.__webdriver_script_results) {
                     return null;
                 }
-                for (const [el, id] of window.__wdsr) {
+                for (const [el, id] of window.__webdriver_script_results) {
                     if (id === elementId) {
                         return el.getAttribute(attrName);
                     }
@@ -1810,10 +1810,10 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             },
             IsDisplayed(element_ref) => {
                 let script_body = r#"
-                if (!window.__wdsr) {
+                if (!window.__webdriver_script_results) {
                     return false;
                 }
-                for (const [el, id] of window.__wdsr) {
+                for (const [el, id] of window.__webdriver_script_results) {
                     if (id === elementId) {
                         const style = window.getComputedStyle(el);
                         const rect = el.getBoundingClientRect();
@@ -1842,11 +1842,11 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             ElementSendKeys(element_ref, keys) => {
                 info!("ElementSendKeys called: element={}, keys={:?}", element_ref, keys);
                 let script_body = r#"
-                if (!window.__wdsr) {
+                if (!window.__webdriver_script_results) {
                     throw new Error('No elements found');
                 }
                 let element;
-                for (const [el, id] of window.__wdsr) {
+                for (const [el, id] of window.__webdriver_script_results) {
                     if (id === elementId) {
                         element = el;
                         break;
@@ -1886,11 +1886,11 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             ElementClear(element_ref) => {
                 info!("ElementClear called: element={}", element_ref);
                 let script_body = r#"
-                if (!window.__wdsr) {
+                if (!window.__webdriver_script_results) {
                     throw new Error('No elements found');
                 }
                 let element;
-                for (const [el, id] of window.__wdsr) {
+                for (const [el, id] of window.__webdriver_script_results) {
                     if (id === elementId) {
                         element = el;
                         break;
@@ -2004,10 +2004,10 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             },
             TakeElementScreenshot(element_ref) => {
                 let script_body = r#"
-                if (!window.__wdsr) {
+                if (!window.__webdriver_script_results) {
                     return null;
                 }
-                for (const [el, id] of window.__wdsr) {
+                for (const [el, id] of window.__webdriver_script_results) {
                     if (id === elementId) {
                         const rect = el.getBoundingClientRect();
                         return JSON.stringify({

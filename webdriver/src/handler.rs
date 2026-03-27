@@ -151,6 +151,7 @@ impl PortManager {
 
 fn port_is_available(port: u16) -> bool {
     std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
+        && std::net::TcpListener::bind(("::1", port)).is_ok()
 }
 
 static PORT_MANAGER: OnceLock<PortManager> = OnceLock::new();
@@ -158,52 +159,6 @@ static PORT_MANAGER: OnceLock<PortManager> = OnceLock::new();
 fn get_port(udid: &str) -> u16 {
     let port_manager = PORT_MANAGER.get_or_init(|| PortManager::new());
     port_manager.get_port(udid)
-}
-
-fn server_request(udid: &str, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
-    let mut child = monitor_simulator_logs(&udid);
-    let stdout = child.stdout.take().expect("Failed to capture stdout");
-    thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        info!("Simulator logs:");
-        for line in reader.lines() {
-            if let Ok(log_line) = line {
-                info!("{}", log_line);
-            }
-        }
-        info!("Simulator logs end");
-    });
-    let port = get_port(udid);
-    let query_string: String = params.iter()
-        .map(|(key, value)| format!("{}={}", key, value))
-        .collect::<Vec<String>>()
-        .join("&");
-    let url = format!("http://localhost:{}/{method}?{}", port, query_string);
-    info!("URL to send: {:?}", url);
-    let client = reqwest::blocking::Client::new();
-    let resp = client.get(url)
-        .timeout(std::time::Duration::from_secs(30)) // TODO Handle variadic timeout set by command
-        .send()
-        .map_err(|e| {
-            if e.is_timeout() {
-            info!("Request timed out");
-            // TODO construct serialised error like: Error::new(ErrorKind::TimedOut, "Request timed out")
-            "Request timed out".to_string()
-            } else {
-            "Other error".to_string()
-            }
-        })
-        .expect("Failed to send request")
-        .text()
-        .expect("Failed to read response text");
-    info!("Response: {:#?}", resp);
-    #[derive(Deserialize)]
-    struct Response {
-        message: String,
-    }
-    let json: Response = serde_json::from_str(&resp).expect("Failed to parse response");
-    let _ = child.kill();
-    return json.message;
 }
 
 fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<String, String> {
@@ -830,9 +785,9 @@ fn quit_macos_app_with_port(port: Option<u16>) {
     
     if let Ok(client) = client {
         for port in ports_to_try {
-            let url = format!("http://localhost:{}/shutdown", port);
+            let url = format!("http://[::1]:{}/shutdown", port);
             info!("Trying shutdown on port {}...", port);
-            match client.get(&url).send() {
+            match client.post(&url).send() {
                 Ok(response) => {
                     info!("Shutdown response on port {}: {:?}", port, response.status());
                     if response.status().is_success() {
@@ -926,10 +881,17 @@ fn make_server_request(port: u16, method: &str, params: &std::collections::HashM
         .map(|(key, value)| format!("{}={}", key, value))
         .collect::<Vec<String>>()
         .join("&");
-    let url = format!("http://localhost:{}/{method}?{}", port, query_string);
+    let url = format!("http://[::1]:{}/{method}?{}", port, query_string);
     info!("URL to send: {:?}", url);
     let client = reqwest::blocking::Client::new();
-    let resp = client.get(url)
+    let use_post = method == "execute" || method == "shutdown" || method == "closeWindow"
+        || method == "switchToWindow" || method == "newWindow";
+    let request = if use_post {
+        client.post(&url)
+    } else {
+        client.get(&url)
+    };
+    let resp = request
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .map_err(|e| {
@@ -1281,7 +1243,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                                 .timeout(std::time::Duration::from_millis(500))
                                 .build()
                                 .expect("Failed to create client");
-                            match client.get(format!("http://localhost:{}/getUrl", port)).send() {
+                            match client.get(format!("http://[::1]:{}/getUrl", port)).send() {
                                 Ok(_) => {
                                     info!("Server responding on port {}", port);
                                     break;
@@ -1307,7 +1269,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                                 .timeout(std::time::Duration::from_millis(500))
                                 .build()
                                 .expect("Failed to create client");
-                            match client.get(format!("http://localhost:{}/contentBlockerReady", port)).send() {
+                            match client.get(format!("http://[::1]:{}/contentBlockerReady", port)).send() {
                                 Ok(response) => {
                                     if let Ok(text) = response.text() {
                                         // Parse JSON: { "message": "true"|"false", "requestPath": "/contentBlockerReady" }
@@ -1444,11 +1406,20 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                             panic!("Failed to launch the app");
                         }
 
-                        // Wait for the server to start
+                        // Wait for the server to start (check both IPv4 and IPv6)
+                        info!("Waiting for automation server on port {} (iOS)...", port);
+                        let mut port_attempts = 0;
                         loop {
                             if !port_is_available(port) {
+                                info!("Port {} is now in use after {} attempts", port, port_attempts);
                                 break;
                             }
+                            port_attempts += 1;
+                            if port_attempts > 120 {
+                                info!("Warning: Timeout waiting for port {} after 60 seconds, proceeding anyway", port);
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(500));
                         }
 
                         // Wait for content blocker rules to be compiled
@@ -1461,7 +1432,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                                 .timeout(std::time::Duration::from_millis(500))
                                 .build()
                                 .expect("Failed to create client");
-                            match client.get(format!("http://localhost:{}/contentBlockerReady", port)).send() {
+                            match client.get(format!("http://[::1]:{}/contentBlockerReady", port)).send() {
                                 Ok(response) => {
                                     if let Ok(text) = response.text() {
                                         // Parse JSON: { "message": "true"|"false", "requestPath": "/contentBlockerReady" }
@@ -1491,7 +1462,30 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                             std::thread::sleep(std::time::Duration::from_millis(500));
                         }
 
-                        let _ = child.kill(); // Gracefully kill the child process
+                        // Ensure a tab exists (iOS may not have one after launch)
+                        info!("Checking for available tabs (iOS)...");
+                        let params = std::collections::HashMap::new();
+                        let handles_response = make_server_request(port, "getWindowHandles", &params);
+                        let has_tab = if let Ok(json) = serde_json::from_str::<Value>(&handles_response) {
+                            json.get("message")
+                                .and_then(|v| v.as_str())
+                                .and_then(|m| serde_json::from_str::<Vec<String>>(m).ok())
+                                .map(|h| !h.is_empty())
+                                .unwrap_or(false)
+                        } else {
+                            false
+                        };
+                        if !has_tab {
+                            info!("No tab found, creating one via newWindow...");
+                            let params = std::collections::HashMap::new();
+                            let resp = make_server_request(port, "newWindow", &params);
+                            info!("newWindow response: {}", resp);
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                        } else {
+                            info!("Tab already available (iOS)");
+                        }
+
+                        let _ = child.kill();
                         let capabilities = Map::new();
                         Ok(WebDriverResponse::NewSession(NewSessionResponse {
                             session_id: simulator_udid.to_string(),
@@ -1526,9 +1520,16 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             Get(params) => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 let url = params.url.as_str();
-                let mut params = std::collections::HashMap::new();
-                params.insert("url", url);
-                server_request_for_platform(session_id, &platform, "navigate", &params);
+                let mut nav_params = std::collections::HashMap::new();
+                nav_params.insert("url", url);
+                let response = server_request_for_platform(session_id, &platform, "navigate", &nav_params);
+                if response.contains("noWindow") || response.contains("error 0") {
+                    info!("Navigate got noWindow, creating new tab and retrying...");
+                    let empty_params = std::collections::HashMap::new();
+                    server_request_for_platform(session_id, &platform, "newWindow", &empty_params);
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    server_request_for_platform(session_id, &platform, "navigate", &nav_params);
+                }
                 return Ok(WebDriverResponse::Void);
             },
             ExecuteScript(params) => {
@@ -1604,6 +1605,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 params.insert("script", script.as_str());
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 let response = server_request_for_platform(session_id, &platform, "execute", &params);
+                info!("ExecuteScript response (first 500 chars): {:?}", &response[..response.len().min(500)]);
                 
                 // Response is the raw message value from the server
                 // It could be:
@@ -1638,8 +1640,8 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 .map(|arg| serde_json::to_string(arg).expect("Failed to serialize argument"))
                 .collect::<Vec<_>>();
 
-                // Append the string "res" as the last argument
-                script_args_str.push("res".to_string());
+                // Append the callback as the last argument (WebDriver async convention)
+                script_args_str.push("callback".to_string());
 
                 // Join the arguments with commas
                 let script_args_str = script_args_str.join(", ");
@@ -1648,17 +1650,21 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 let promiseResult = new Promise((res, rej) => {
                   const timeout = setTimeout(() => {
                     rej("Script execution timed out");
-                  }, 15000); // 15 secs
+                  }, 30000);
 
-                  (async function asyncMethod () {
-                    __SCRIPT__
-                  }(__SCRIPT_ARGS__)).then(result => {
+                  const callback = (result) => {
                     clearTimeout(timeout);
                     res(result);
-                  }).catch(error => {
+                  };
+
+                  try {
+                    (function () {
+                      __SCRIPT__
+                    })(__SCRIPT_ARGS__);
+                  } catch(error) {
                     clearTimeout(timeout);
                     rej(error);
-                  });
+                  }
                 });
                 return promiseResult;
                 "#;

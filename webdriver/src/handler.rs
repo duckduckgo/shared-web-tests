@@ -1545,18 +1545,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 // Join the arguments with commas
                 let script_args_str = script_args_str.join(", ");
 
-                // Wrapper that handles:
-                // 1. Converting element references in args to actual DOM elements
-                // 2. Converting DOM element returns to element references
-                let script_wrapper = r#"
-                  const K = "element-6066-11e4-a52e-4f735466cecf";
-                  function _uid(){if(typeof crypto!=='undefined'&&crypto.randomUUID)return crypto.randomUUID();return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16)})}
-                  function _r(a){return a.map(x=>(x&&typeof x==='object'&&x[K])?((()=>{if(window.__wdsr){for(const[e,i]of window.__wdsr)if(i===x[K])return e}throw new Error('No ref: '+x[K])})())  :x)}
-                  const _a = _r([__SCRIPT_ARGS__]);
-                  const _v = (function(){__SCRIPT__}).apply(null,_a);
-                  if(_v instanceof Element||_v instanceof Document){if(!window.__wdsr)window.__wdsr=new Map();let u;if(window.__wdsr.has(_v))u=window.__wdsr.get(_v);else{u=_uid();window.__wdsr.set(_v,u)}const r={};r[K]=u;return r}
-                  return _v;
-                "#;
+                let script_wrapper = include_str!("execute-script-wrapper.js");
                 // Replace SCRIPT and SCRIPT_ARGS with the actual script and arguments
                 let script = script_wrapper.replace("__SCRIPT__", script).replace("__SCRIPT_ARGS__", script_args_str.as_str());
                 let mut params = std::collections::HashMap::new();

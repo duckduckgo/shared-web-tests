@@ -39,16 +39,16 @@ function runScript() {
                     reject(new Error('Element not found after 5 attempts'));
                     return;
                 }
-                if (!window.__webdriver_script_results) {
+                if (!window.__wdsr) {
                     // TODO make a WeakMap and handle references to elements with WeakRef or a similar mechanism
-                    window.__webdriver_script_results = new Map();
+                    window.__wdsr = new Map();
                 }
                 let uuid;
-                if (window.__webdriver_script_results.has(element)) {
-                    uuid = window.__webdriver_script_results.get(element);
+                if (window.__wdsr.has(element)) {
+                    uuid = window.__wdsr.get(element);
                 } else {
-                    uuid = window.crypto.randomUUID();
-                    window.__webdriver_script_results.set(element, uuid);
+                    uuid = (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) { var r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16); });
+                    window.__wdsr.set(element, uuid);
                 }
                 resolve(uuid);
                 return;

@@ -1549,53 +1549,13 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 // 1. Converting element references in args to actual DOM elements
                 // 2. Converting DOM element returns to element references
                 let script_wrapper = r#"
-                  return (function () {
-                    const ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf";
-                    
-                    // Convert element references in arguments to actual DOM elements
-                    function resolveElementRefs(args) {
-                      return args.map(arg => {
-                        if (arg && typeof arg === 'object' && arg[ELEMENT_KEY]) {
-                          // This is an element reference - look up the actual element
-                          const uuid = arg[ELEMENT_KEY];
-                          if (window.__webdriver_script_results) {
-                            for (const [el, id] of window.__webdriver_script_results) {
-                              if (id === uuid) {
-                                return el;
-                              }
-                            }
-                          }
-                          throw new Error('Element not found for reference: ' + uuid);
-                        }
-                        return arg;
-                      });
-                    }
-                    
-                    const rawArgs = [__SCRIPT_ARGS__];
-                    const resolvedArgs = resolveElementRefs(rawArgs);
-                    
-                    const result = (function () {
-                      __SCRIPT__
-                    }).apply(null, resolvedArgs);
-                    
-                    // Check if result is a DOM element
-                    if (result instanceof Element || result instanceof Document) {
-                      if (!window.__webdriver_script_results) {
-                        window.__webdriver_script_results = new Map();
-                      }
-                      let uuid;
-                      if (window.__webdriver_script_results.has(result)) {
-                        uuid = window.__webdriver_script_results.get(result);
-                      } else {
-                        uuid = window.crypto.randomUUID();
-                        window.__webdriver_script_results.set(result, uuid);
-                      }
-                      const elementRef = {};
-                      elementRef[ELEMENT_KEY] = uuid;
-                      return elementRef;
-                    }
-                    return result;
-                  }());
+                  const K = "element-6066-11e4-a52e-4f735466cecf";
+                  function _uid(){if(typeof crypto!=='undefined'&&crypto.randomUUID)return crypto.randomUUID();return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g,function(c){var r=Math.random()*16|0;return(c==='x'?r:(r&0x3|0x8)).toString(16)})}
+                  function _r(a){return a.map(x=>(x&&typeof x==='object'&&x[K])?((()=>{if(window.__wdsr){for(const[e,i]of window.__wdsr)if(i===x[K])return e}throw new Error('No ref: '+x[K])})())  :x)}
+                  const _a = _r([__SCRIPT_ARGS__]);
+                  const _v = (function(){__SCRIPT__}).apply(null,_a);
+                  if(_v instanceof Element||_v instanceof Document){if(!window.__wdsr)window.__wdsr=new Map();let u;if(window.__wdsr.has(_v))u=window.__wdsr.get(_v);else{u=_uid();window.__wdsr.set(_v,u)}const r={};r[K]=u;return r}
+                  return _v;
                 "#;
                 // Replace SCRIPT and SCRIPT_ARGS with the actual script and arguments
                 let script = script_wrapper.replace("__SCRIPT__", script).replace("__SCRIPT_ARGS__", script_args_str.as_str());
@@ -1607,27 +1567,22 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 let response = server_request_for_platform(session_id, &platform, "execute", &params);
                 info!("ExecuteScript response (first 500 chars): {:?}", &response[..response.len().min(500)]);
                 
-                // Response is the raw message value from the server
-                // It could be:
-                // 1. A JSON object string like {"element-6066-...": "uuid"}
-                // 2. A JSON array or primitive
-                // 3. A plain string (URL, text content, etc.)
-                // 4. "null" for null values
-                // 5. "true"/"false" for booleans
-                
-                // Try to parse as JSON first
                 if let Ok(json_value) = serde_json::from_str::<Value>(&response) {
-                    // Check for element reference with standard WebDriver key
+                    if let Some(_err) = json_value.get("error") {
+                        info!("ExecuteScript got error from automation server: {:?}", json_value);
+                        return Err(webdriver::error::WebDriverError::new(
+                            webdriver::error::ErrorStatus::JavascriptError,
+                            format!("Script execution failed: {}", response),
+                        ));
+                    }
                     if let Some(element_id) = json_value.get(webdriver::common::ELEMENT_KEY).and_then(|v| v.as_str()) {
                         let mut res = Map::new();
                         res.insert(webdriver::common::ELEMENT_KEY.to_string(), Value::String(element_id.to_string()));
                         return Ok(WebDriverResponse::Generic(ValueResponse(res.into())));
                     }
-                    // Return parsed JSON value (could be array, object, null, bool, number)
                     return Ok(WebDriverResponse::Generic(ValueResponse(json_value)));
                 }
                 
-                // Not valid JSON - treat as plain string
                 return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(response))));
             },
             ExecuteAsyncScript(params) => {
@@ -1778,11 +1733,11 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             ElementClick(element_ref) => {
                 let script_body = r#"
                 let element;
-                if (!window.__webdriver_script_results) {
+                if (!window.__wdsr) {
                     throw new Error('No elements found');
                 }
                 // Find element by UUID
-                for (const [el, id] of window.__webdriver_script_results) {
+                for (const [el, id] of window.__wdsr) {
                     if (id === elementId) {
                         element = el;
                         break;
@@ -1808,10 +1763,10 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             },
             GetElementText(element_ref) => {
                 let script_body = r#"
-                if (!window.__webdriver_script_results) {
+                if (!window.__wdsr) {
                     return '';
                 }
-                for (const [el, id] of window.__webdriver_script_results) {
+                for (const [el, id] of window.__wdsr) {
                     if (id === elementId) {
                         return el.textContent || el.innerText || '';
                     }
@@ -1837,10 +1792,10 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             GetElementAttribute(element_ref, attr_name) => {
                 info!("GetElementAttribute called: element={}, attr={}", element_ref, attr_name);
                 let script_body = r#"
-                if (!window.__webdriver_script_results) {
+                if (!window.__wdsr) {
                     return null;
                 }
-                for (const [el, id] of window.__webdriver_script_results) {
+                for (const [el, id] of window.__wdsr) {
                     if (id === elementId) {
                         return el.getAttribute(attrName);
                     }
@@ -1866,10 +1821,10 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             },
             IsDisplayed(element_ref) => {
                 let script_body = r#"
-                if (!window.__webdriver_script_results) {
+                if (!window.__wdsr) {
                     return false;
                 }
-                for (const [el, id] of window.__webdriver_script_results) {
+                for (const [el, id] of window.__wdsr) {
                     if (id === elementId) {
                         const style = window.getComputedStyle(el);
                         const rect = el.getBoundingClientRect();
@@ -1898,11 +1853,11 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             ElementSendKeys(element_ref, keys) => {
                 info!("ElementSendKeys called: element={}, keys={:?}", element_ref, keys);
                 let script_body = r#"
-                if (!window.__webdriver_script_results) {
+                if (!window.__wdsr) {
                     throw new Error('No elements found');
                 }
                 let element;
-                for (const [el, id] of window.__webdriver_script_results) {
+                for (const [el, id] of window.__wdsr) {
                     if (id === elementId) {
                         element = el;
                         break;
@@ -1942,11 +1897,11 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             ElementClear(element_ref) => {
                 info!("ElementClear called: element={}", element_ref);
                 let script_body = r#"
-                if (!window.__webdriver_script_results) {
+                if (!window.__wdsr) {
                     throw new Error('No elements found');
                 }
                 let element;
-                for (const [el, id] of window.__webdriver_script_results) {
+                for (const [el, id] of window.__wdsr) {
                     if (id === elementId) {
                         element = el;
                         break;
@@ -2060,10 +2015,10 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             },
             TakeElementScreenshot(element_ref) => {
                 let script_body = r#"
-                if (!window.__webdriver_script_results) {
+                if (!window.__wdsr) {
                     return null;
                 }
-                for (const [el, id] of window.__webdriver_script_results) {
+                for (const [el, id] of window.__wdsr) {
                     if (id === elementId) {
                         const rect = el.getBoundingClientRect();
                         return JSON.stringify({

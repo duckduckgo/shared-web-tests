@@ -1554,11 +1554,9 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 params.insert("script", script.as_str());
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 let response = server_request_for_platform(session_id, &platform, "execute", &params);
-                info!("ExecuteScript response (first 500 chars): {:?}", &response[..response.len().min(500)]);
-                
                 if let Ok(json_value) = serde_json::from_str::<Value>(&response) {
-                    if let Some(_err) = json_value.get("error") {
-                        info!("ExecuteScript got error from automation server: {:?}", json_value);
+                    if json_value.get("error").is_some() {
+                        info!("ExecuteScript error from automation server: {:?}", json_value);
                         return Err(webdriver::error::WebDriverError::new(
                             webdriver::error::ErrorStatus::JavascriptError,
                             format!("Script execution failed: {}", response),

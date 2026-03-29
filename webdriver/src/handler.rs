@@ -1595,14 +1595,15 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                     res(result);
                   };
 
-                  try {
-                    (function () {
-                      __SCRIPT__
-                    })(__SCRIPT_ARGS__);
-                  } catch(error) {
+                  (async function () {
+                    __SCRIPT__
+                  })(__SCRIPT_ARGS__).then(result => {
+                    clearTimeout(timeout);
+                    res(result);
+                  }).catch(error => {
                     clearTimeout(timeout);
                     rej(error);
-                  }
+                  });
                 });
                 return promiseResult;
                 "#;

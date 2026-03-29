@@ -1539,7 +1539,9 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 // Join the arguments with commas
                 let script_args_str = script_args_str.join(", ");
 
+                let uuid_polyfill = include_str!("generate-uuid.js");
                 let script_wrapper = include_str!("execute-script-wrapper.js");
+                let script_wrapper = &format!("{}\n{}", uuid_polyfill, script_wrapper);
                 // Replace SCRIPT and SCRIPT_ARGS with the actual script and arguments
                 let script = script_wrapper.replace("__SCRIPT__", script).replace("__SCRIPT_ARGS__", script_args_str.as_str());
                 let mut params = std::collections::HashMap::new();
@@ -1617,8 +1619,9 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 return Ok(WebDriverResponse::Generic(ValueResponse(parsed.into())));
             },
             FindElement(params) => {
-                // Read file
-                let script = include_str!("find-element.js");
+                let uuid_polyfill = include_str!("generate-uuid.js");
+                let find_element_js = include_str!("find-element.js");
+                let script = &format!("{}\n{}", uuid_polyfill, find_element_js);
                 // URL encode the script
                 let script = urlencoding::encode(&script).to_string();
                 let mut url_params = std::collections::HashMap::new();
@@ -1644,8 +1647,9 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 return Ok(WebDriverResponse::Generic(ValueResponse(res.into())));
             },
             FindElements(params) => {
-                // Read file
-                let script = include_str!("find-elements.js");
+                let uuid_polyfill = include_str!("generate-uuid.js");
+                let find_elements_js = include_str!("find-elements.js");
+                let script = &format!("{}\n{}", uuid_polyfill, find_elements_js);
                 // URL encode the script
                 let script = urlencoding::encode(&script).to_string();
                 let mut url_params = std::collections::HashMap::new();

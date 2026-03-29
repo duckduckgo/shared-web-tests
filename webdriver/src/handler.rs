@@ -119,6 +119,15 @@ impl Handler {
     pub fn new() -> Self {
         Handler {}
     }
+
+    fn compatibility_window_rect() -> WindowRectResponse {
+        WindowRectResponse {
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 720,
+        }
+    }
 }
 
 struct PortManager {
@@ -627,6 +636,12 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 let window_handles: Vec<String> = serde_json::from_str(&window_handles).expect("Failed to parse window handles");
                 info!("Window handles: {:#?}", window_handles);
                 return Ok(WebDriverResponse::Generic(ValueResponse(window_handles.into())));
+            },
+            GetWindowRect => {
+                return Ok(WebDriverResponse::WindowRect(Handler::compatibility_window_rect()));
+            },
+            SetWindowRect(_) => {
+                return Ok(WebDriverResponse::WindowRect(Handler::compatibility_window_rect()));
             },
             GetCurrentUrl => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");

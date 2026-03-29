@@ -47,7 +47,7 @@ function runScript() {
                 if (window.__webdriver_script_results.has(element)) {
                     uuid = window.__webdriver_script_results.get(element);
                 } else {
-                    uuid = window.crypto.randomUUID();
+                    uuid = generateUUID();
                     window.__webdriver_script_results.set(element, uuid);
                 }
                 resolve(uuid);

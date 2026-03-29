@@ -151,6 +151,7 @@ impl PortManager {
 
 fn port_is_available(port: u16) -> bool {
     std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
+        && std::net::TcpListener::bind(("::1", port)).is_ok()
 }
 
 static PORT_MANAGER: OnceLock<PortManager> = OnceLock::new();
@@ -158,52 +159,6 @@ static PORT_MANAGER: OnceLock<PortManager> = OnceLock::new();
 fn get_port(udid: &str) -> u16 {
     let port_manager = PORT_MANAGER.get_or_init(|| PortManager::new());
     port_manager.get_port(udid)
-}
-
-fn server_request(udid: &str, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
-    let mut child = monitor_simulator_logs(&udid);
-    let stdout = child.stdout.take().expect("Failed to capture stdout");
-    thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        info!("Simulator logs:");
-        for line in reader.lines() {
-            if let Ok(log_line) = line {
-                info!("{}", log_line);
-            }
-        }
-        info!("Simulator logs end");
-    });
-    let port = get_port(udid);
-    let query_string: String = params.iter()
-        .map(|(key, value)| format!("{}={}", key, value))
-        .collect::<Vec<String>>()
-        .join("&");
-    let url = format!("http://localhost:{}/{method}?{}", port, query_string);
-    info!("URL to send: {:?}", url);
-    let client = reqwest::blocking::Client::new();
-    let resp = client.get(url)
-        .timeout(std::time::Duration::from_secs(30)) // TODO Handle variadic timeout set by command
-        .send()
-        .map_err(|e| {
-            if e.is_timeout() {
-            info!("Request timed out");
-            // TODO construct serialised error like: Error::new(ErrorKind::TimedOut, "Request timed out")
-            "Request timed out".to_string()
-            } else {
-            "Other error".to_string()
-            }
-        })
-        .expect("Failed to send request")
-        .text()
-        .expect("Failed to read response text");
-    info!("Response: {:#?}", resp);
-    #[derive(Deserialize)]
-    struct Response {
-        message: String,
-    }
-    let json: Response = serde_json::from_str(&resp).expect("Failed to parse response");
-    let _ = child.kill();
-    return json.message;
 }
 
 fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<String, String> {
@@ -830,9 +785,9 @@ fn quit_macos_app_with_port(port: Option<u16>) {
     
     if let Ok(client) = client {
         for port in ports_to_try {
-            let url = format!("http://localhost:{}/shutdown", port);
+            let url = format!("http://[::1]:{}/shutdown", port);
             info!("Trying shutdown on port {}...", port);
-            match client.get(&url).send() {
+            match client.post(&url).send() {
                 Ok(response) => {
                     info!("Shutdown response on port {}: {:?}", port, response.status());
                     if response.status().is_success() {
@@ -926,10 +881,17 @@ fn make_server_request(port: u16, method: &str, params: &std::collections::HashM
         .map(|(key, value)| format!("{}={}", key, value))
         .collect::<Vec<String>>()
         .join("&");
-    let url = format!("http://localhost:{}/{method}?{}", port, query_string);
+    let url = format!("http://[::1]:{}/{method}?{}", port, query_string);
     info!("URL to send: {:?}", url);
     let client = reqwest::blocking::Client::new();
-    let resp = client.get(url)
+    let use_post = method == "execute" || method == "shutdown" || method == "closeWindow"
+        || method == "switchToWindow" || method == "newWindow";
+    let request = if use_post {
+        client.post(&url)
+    } else {
+        client.get(&url)
+    };
+    let resp = request
         .timeout(std::time::Duration::from_secs(30))
         .send()
         .map_err(|e| {
@@ -1281,7 +1243,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                                 .timeout(std::time::Duration::from_millis(500))
                                 .build()
                                 .expect("Failed to create client");
-                            match client.get(format!("http://localhost:{}/getUrl", port)).send() {
+                            match client.get(format!("http://[::1]:{}/getUrl", port)).send() {
                                 Ok(_) => {
                                     info!("Server responding on port {}", port);
                                     break;
@@ -1307,7 +1269,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                                 .timeout(std::time::Duration::from_millis(500))
                                 .build()
                                 .expect("Failed to create client");
-                            match client.get(format!("http://localhost:{}/contentBlockerReady", port)).send() {
+                            match client.get(format!("http://[::1]:{}/contentBlockerReady", port)).send() {
                                 Ok(response) => {
                                     if let Ok(text) = response.text() {
                                         // Parse JSON: { "message": "true"|"false", "requestPath": "/contentBlockerReady" }
@@ -1444,11 +1406,20 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                             panic!("Failed to launch the app");
                         }
 
-                        // Wait for the server to start
+                        // Wait for the server to start (check both IPv4 and IPv6)
+                        info!("Waiting for automation server on port {} (iOS)...", port);
+                        let mut port_attempts = 0;
                         loop {
                             if !port_is_available(port) {
+                                info!("Port {} is now in use after {} attempts", port, port_attempts);
                                 break;
                             }
+                            port_attempts += 1;
+                            if port_attempts > 120 {
+                                info!("Warning: Timeout waiting for port {} after 60 seconds, proceeding anyway", port);
+                                break;
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(500));
                         }
 
                         // Wait for content blocker rules to be compiled
@@ -1461,7 +1432,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                                 .timeout(std::time::Duration::from_millis(500))
                                 .build()
                                 .expect("Failed to create client");
-                            match client.get(format!("http://localhost:{}/contentBlockerReady", port)).send() {
+                            match client.get(format!("http://[::1]:{}/contentBlockerReady", port)).send() {
                                 Ok(response) => {
                                     if let Ok(text) = response.text() {
                                         // Parse JSON: { "message": "true"|"false", "requestPath": "/contentBlockerReady" }
@@ -1491,7 +1462,24 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                             std::thread::sleep(std::time::Duration::from_millis(500));
                         }
 
-                        let _ = child.kill(); // Gracefully kill the child process
+                        // Ensure a tab exists (iOS may not have one after launch)
+                        info!("Checking for available tabs (iOS)...");
+                        let params = std::collections::HashMap::new();
+                        let handles_response = make_server_request(port, "getWindowHandles", &params);
+                        let has_tab = serde_json::from_str::<Vec<String>>(&handles_response)
+                            .map(|h| !h.is_empty())
+                            .unwrap_or(false);
+                        if !has_tab {
+                            info!("No tab found, creating one via newWindow...");
+                            let params = std::collections::HashMap::new();
+                            let resp = make_server_request(port, "newWindow", &params);
+                            info!("newWindow response: {}", resp);
+                            std::thread::sleep(std::time::Duration::from_millis(500));
+                        } else {
+                            info!("Tab already available (iOS)");
+                        }
+
+                        let _ = child.kill();
                         let capabilities = Map::new();
                         Ok(WebDriverResponse::NewSession(NewSessionResponse {
                             session_id: simulator_udid.to_string(),
@@ -1526,9 +1514,16 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
             Get(params) => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 let url = params.url.as_str();
-                let mut params = std::collections::HashMap::new();
-                params.insert("url", url);
-                server_request_for_platform(session_id, &platform, "navigate", &params);
+                let mut nav_params = std::collections::HashMap::new();
+                nav_params.insert("url", url);
+                let response = server_request_for_platform(session_id, &platform, "navigate", &nav_params);
+                if response.contains("noWindow") || response.contains("error 0") {
+                    info!("Navigate got noWindow, creating new tab and retrying...");
+                    let empty_params = std::collections::HashMap::new();
+                    server_request_for_platform(session_id, &platform, "newWindow", &empty_params);
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    server_request_for_platform(session_id, &platform, "navigate", &nav_params);
+                }
                 return Ok(WebDriverResponse::Void);
             },
             ExecuteScript(params) => {
@@ -1544,58 +1539,9 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 // Join the arguments with commas
                 let script_args_str = script_args_str.join(", ");
 
-                // Wrapper that handles:
-                // 1. Converting element references in args to actual DOM elements
-                // 2. Converting DOM element returns to element references
-                let script_wrapper = r#"
-                  return (function () {
-                    const ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf";
-                    
-                    // Convert element references in arguments to actual DOM elements
-                    function resolveElementRefs(args) {
-                      return args.map(arg => {
-                        if (arg && typeof arg === 'object' && arg[ELEMENT_KEY]) {
-                          // This is an element reference - look up the actual element
-                          const uuid = arg[ELEMENT_KEY];
-                          if (window.__webdriver_script_results) {
-                            for (const [el, id] of window.__webdriver_script_results) {
-                              if (id === uuid) {
-                                return el;
-                              }
-                            }
-                          }
-                          throw new Error('Element not found for reference: ' + uuid);
-                        }
-                        return arg;
-                      });
-                    }
-                    
-                    const rawArgs = [__SCRIPT_ARGS__];
-                    const resolvedArgs = resolveElementRefs(rawArgs);
-                    
-                    const result = (function () {
-                      __SCRIPT__
-                    }).apply(null, resolvedArgs);
-                    
-                    // Check if result is a DOM element
-                    if (result instanceof Element || result instanceof Document) {
-                      if (!window.__webdriver_script_results) {
-                        window.__webdriver_script_results = new Map();
-                      }
-                      let uuid;
-                      if (window.__webdriver_script_results.has(result)) {
-                        uuid = window.__webdriver_script_results.get(result);
-                      } else {
-                        uuid = window.crypto.randomUUID();
-                        window.__webdriver_script_results.set(result, uuid);
-                      }
-                      const elementRef = {};
-                      elementRef[ELEMENT_KEY] = uuid;
-                      return elementRef;
-                    }
-                    return result;
-                  }());
-                "#;
+                let uuid_polyfill = include_str!("generate-uuid.js");
+                let script_wrapper = include_str!("execute-script-wrapper.js");
+                let script_wrapper = &format!("{}\n{}", uuid_polyfill, script_wrapper);
                 // Replace SCRIPT and SCRIPT_ARGS with the actual script and arguments
                 let script = script_wrapper.replace("__SCRIPT__", script).replace("__SCRIPT_ARGS__", script_args_str.as_str());
                 let mut params = std::collections::HashMap::new();
@@ -1604,28 +1550,22 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 params.insert("script", script.as_str());
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 let response = server_request_for_platform(session_id, &platform, "execute", &params);
-                
-                // Response is the raw message value from the server
-                // It could be:
-                // 1. A JSON object string like {"element-6066-...": "uuid"}
-                // 2. A JSON array or primitive
-                // 3. A plain string (URL, text content, etc.)
-                // 4. "null" for null values
-                // 5. "true"/"false" for booleans
-                
-                // Try to parse as JSON first
                 if let Ok(json_value) = serde_json::from_str::<Value>(&response) {
-                    // Check for element reference with standard WebDriver key
+                    if json_value.get("error").and_then(|v| v.as_str()).is_some() {
+                        info!("ExecuteScript error from automation server: {:?}", json_value);
+                        return Err(webdriver::error::WebDriverError::new(
+                            webdriver::error::ErrorStatus::JavascriptError,
+                            format!("Script execution failed: {}", response),
+                        ));
+                    }
                     if let Some(element_id) = json_value.get(webdriver::common::ELEMENT_KEY).and_then(|v| v.as_str()) {
                         let mut res = Map::new();
                         res.insert(webdriver::common::ELEMENT_KEY.to_string(), Value::String(element_id.to_string()));
                         return Ok(WebDriverResponse::Generic(ValueResponse(res.into())));
                     }
-                    // Return parsed JSON value (could be array, object, null, bool, number)
                     return Ok(WebDriverResponse::Generic(ValueResponse(json_value)));
                 }
                 
-                // Not valid JSON - treat as plain string
                 return Ok(WebDriverResponse::Generic(ValueResponse(Value::String(response))));
             },
             ExecuteAsyncScript(params) => {
@@ -1638,8 +1578,8 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 .map(|arg| serde_json::to_string(arg).expect("Failed to serialize argument"))
                 .collect::<Vec<_>>();
 
-                // Append the string "res" as the last argument
-                script_args_str.push("res".to_string());
+                // Append the callback as the last argument (WebDriver async convention)
+                script_args_str.push("callback".to_string());
 
                 // Join the arguments with commas
                 let script_args_str = script_args_str.join(", ");
@@ -1648,11 +1588,16 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 let promiseResult = new Promise((res, rej) => {
                   const timeout = setTimeout(() => {
                     rej("Script execution timed out");
-                  }, 15000); // 15 secs
+                  }, 30000);
 
-                  (async function asyncMethod () {
+                  const callback = (result) => {
+                    clearTimeout(timeout);
+                    res(result);
+                  };
+
+                  (async function () {
                     __SCRIPT__
-                  }(__SCRIPT_ARGS__)).then(result => {
+                  })(__SCRIPT_ARGS__).then(result => {
                     clearTimeout(timeout);
                     res(result);
                   }).catch(error => {
@@ -1675,8 +1620,9 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 return Ok(WebDriverResponse::Generic(ValueResponse(parsed.into())));
             },
             FindElement(params) => {
-                // Read file
-                let script = include_str!("find-element.js");
+                let uuid_polyfill = include_str!("generate-uuid.js");
+                let find_element_js = include_str!("find-element.js");
+                let script = &format!("{}\n{}", uuid_polyfill, find_element_js);
                 // URL encode the script
                 let script = urlencoding::encode(&script).to_string();
                 let mut url_params = std::collections::HashMap::new();
@@ -1702,8 +1648,9 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 return Ok(WebDriverResponse::Generic(ValueResponse(res.into())));
             },
             FindElements(params) => {
-                // Read file
-                let script = include_str!("find-elements.js");
+                let uuid_polyfill = include_str!("generate-uuid.js");
+                let find_elements_js = include_str!("find-elements.js");
+                let script = &format!("{}\n{}", uuid_polyfill, find_elements_js);
                 // URL encode the script
                 let script = urlencoding::encode(&script).to_string();
                 let mut url_params = std::collections::HashMap::new();

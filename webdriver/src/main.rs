@@ -63,15 +63,17 @@ fn get_program_name() -> String {
 }
 
 fn main() -> ExitCode {
-    // Configure logger at runtime
+    let cwd = env::current_dir().unwrap_or_default();
+    let log_path = cwd.join("output.log");
+
     fern::Dispatch::new()
-        // Add blanket level filter -
         .level(log::LevelFilter::Info)
-        // Output to stdout, files, and other Dispatch configurations
         .chain(std::io::stdout())
-        .chain(fern::log_file("output.log").expect("Unable to open log file"))
-        // Apply globally
+        .chain(fern::log_file(&log_path).expect("Unable to open log file"))
         .apply().expect("Unable to apply logger");
+
+    info!("ddgdriver starting — cwd={} log={}", cwd.display(), log_path.display());
+    info!("TARGET_PLATFORM={:?}", env::var("TARGET_PLATFORM").ok());
 
     let args = Args::parse();
     let port = args.port;

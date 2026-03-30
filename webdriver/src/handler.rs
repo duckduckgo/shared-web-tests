@@ -121,6 +121,13 @@ impl Handler {
     }
 
     fn compatibility_window_rect() -> WindowRectResponse {
+        // Temporary compatibility response for WPT session bootstrap.
+        // Apple automation currently doesn't expose native get/set window rect endpoints,
+        // so we return a stable synthetic rect to keep shared web tests running.
+        // The longer-term fix is to plumb a real `getWindowRect` request through the
+        // Apple automation server and derive it from the active window or screen bounds,
+        // while deciding whether `setWindowRect` should be implemented or remain a
+        // documented no-op on platforms that can't resize app windows programmatically.
         WindowRectResponse {
             x: 0,
             y: 0,

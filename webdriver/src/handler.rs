@@ -686,11 +686,14 @@ fn is_macos_app_running(_bundle_id: &str) -> bool {
 }
 
 fn launch_macos_app(app_path: &str, port: u16, ddg_caps: &DdgCapabilities) -> Result<(Child, String), String> {
+    let launch_start = std::time::Instant::now();
     info!("Launching macOS app at: {}", app_path);
+    info!("  App exists: {}", std::path::Path::new(app_path).exists());
+    info!("  Port: {}", port);
 
     // Get the bundle ID from the app
     let bundle_id = get_macos_bundle_id(app_path);
-    info!("Detected bundle ID: {}", bundle_id);
+    info!("Detected bundle ID: {} (took {:?})", bundle_id, launch_start.elapsed());
 
     // First, quit any running instance gracefully
     if is_macos_app_running(&bundle_id) {
@@ -766,6 +769,7 @@ fn launch_macos_app(app_path: &str, port: u16, ddg_caps: &DdgCapabilities) -> Re
             .map_err(|e| format!("Failed to launch app: {}", e))?
     };
 
+    info!("[TIMING] launch_macos_app completed in {:?}", launch_start.elapsed());
     Ok((child, bundle_id))
 }
 
@@ -1200,6 +1204,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 
                 match platform {
                     Platform::MacOS => {
+                        let session_start = std::time::Instant::now();
                         info!("Starting macOS automation...");
                         
                         // Generate a unique session ID for macOS
@@ -1213,7 +1218,6 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                                 PathBuf::from(env_path)
                             } else {
                                 let current_dir = std::env::current_dir().expect("Failed to get current directory");
-                                // apple-browsers DerivedData is in the ddg-workflow monorepo
                                 current_dir.join("../ddg-workflow/apple-browsers/DerivedData")
                             };
                             format!("{}/Build/Products/Debug/DuckDuckGo.app", derived_data_path.to_str().expect("Failed to convert path to string"))
@@ -1221,17 +1225,27 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                         
                         info!("macOS App Path: {:?}", app_path);
                         
+                        // Validate app path exists before proceeding
+                        if !std::path::Path::new(&app_path).exists() {
+                            info!("ERROR: macOS app not found at {:?}", app_path);
+                            return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+                        }
+                        info!("[TIMING] macOS app path validated: {:?}", session_start.elapsed());
+                        
                         // Get port for this session
                         let port = get_port(&session_id);
+                        info!("Assigned port {} for macOS session {}", port, session_id);
                         
                         // Launch the macOS app with DuckDuckGo capabilities
+                        let step = std::time::Instant::now();
                         let bundle_id = match launch_macos_app(&app_path, port, &ddg_caps) {
                             Ok((_, bundle_id)) => {
-                                info!("Launched macOS app");
+                                info!("[TIMING] launch_macos_app: {:?}", step.elapsed());
+                                info!("Launched macOS app with bundle_id={}", bundle_id);
                                 bundle_id
                             },
                             Err(e) => {
-                                info!("Failed to launch macOS app: {}", e);
+                                info!("Failed to launch macOS app after {:?}: {}", step.elapsed(), e);
                                 return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
                             }
                         };
@@ -1252,24 +1266,27 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                         
                         // Wait for the server to start by testing connectivity
                         info!("Waiting for automation server on port {}...", port);
+                        let server_wait_start = std::time::Instant::now();
                         let mut attempts = 0;
                         loop {
-                            // Try to actually connect to the server
                             let client = reqwest::blocking::Client::builder()
                                 .timeout(std::time::Duration::from_millis(500))
                                 .build()
                                 .expect("Failed to create client");
                             match client.get(format!("http://[::1]:{}/getUrl", port)).send() {
-                                Ok(_) => {
-                                    info!("Server responding on port {}", port);
+                                Ok(resp) => {
+                                    info!("[TIMING] macOS server responding on port {} after {:?} ({} attempts), status={}", port, server_wait_start.elapsed(), attempts, resp.status());
                                     break;
                                 }
-                                Err(_) => {
-                                    // Server not ready yet
+                                Err(e) => {
+                                    if attempts % 10 == 0 {
+                                        info!("macOS server not ready yet (attempt {}, {:?} elapsed): {}", attempts, server_wait_start.elapsed(), e);
+                                    }
                                 }
                             }
                             attempts += 1;
                             if attempts > 120 { // 60 seconds timeout
+                                info!("[TIMING] macOS server wait TIMEOUT after {:?} ({} attempts)", server_wait_start.elapsed(), attempts);
                                 panic!("Timeout waiting for automation server to start");
                             }
                             std::thread::sleep(std::time::Duration::from_millis(500));
@@ -1315,6 +1332,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                             std::thread::sleep(std::time::Duration::from_millis(500));
                         }
                         
+                        info!("[TIMING] macOS NewSession total: {:?}", session_start.elapsed());
                         let _ = child.kill();
                         let capabilities = Map::new();
                         Ok(WebDriverResponse::NewSession(NewSessionResponse {
@@ -1323,6 +1341,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                         }))
                     },
                     Platform::IOS => {
+                        let session_start = std::time::Instant::now();
                         info!("Starting iOS automation... {:?} {:?}", target_device, target_os);
                         let simulator_udid = match find_or_create_simulator(&target_device, &target_os) {
                             Ok(udid) => udid,
@@ -1331,19 +1350,24 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                                 return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
                             }
                         };
+                        info!("[TIMING] find_or_create_simulator: {:?}", session_start.elapsed());
                         info!("Simulator UDID: {:?}", simulator_udid);
                     
-                        // Boot the simulator (if it's not already booted)
+                        let step = std::time::Instant::now();
                         xcrun_command(&["simctl", "boot", &simulator_udid]);
+                        info!("[TIMING] simctl boot: {:?}", step.elapsed());
                     
-                        // Launch the simulator app
+                        let step = std::time::Instant::now();
                         Command::new("open")
                             .args(&["-a", "Simulator"])
                             .status()
                             .expect("Failed to open the Simulator app");
+                        info!("[TIMING] open Simulator.app: {:?}", step.elapsed());
                         info!("Opened Simulator app");
+                        let step = std::time::Instant::now();
                         xcrun_command(&["simctl", "terminate", &simulator_udid, APP_BUNDLE_ID]);
                         xcrun_command(&["simctl", "uninstall", &simulator_udid, APP_BUNDLE_ID]);
+                        info!("[TIMING] terminate+uninstall: {:?}", step.elapsed());
                         info!("Uninstalled app");
                         // Install the app on the simulator
                         let derived_data_path = if let Ok(env_path) = std::env::var("DERIVED_DATA_PATH") {
@@ -1355,9 +1379,11 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                         let derived_data_path = derived_data_path.to_str().expect("Failed to convert path to string");
                         let app_path = format!("{derived_data_path}/Build/Products/Debug-iphonesimulator/DuckDuckGo.app");
                         info!("App Path: {:?}", app_path);
+                        let step = std::time::Instant::now();
                         if !xcrun_command(&["simctl", "install", &simulator_udid, app_path.as_str()]).status.success() {
                             panic!("Failed to install the app");
                         }
+                        info!("[TIMING] simctl install: {:?}", step.elapsed());
                         info!("Installed app");
                         let mut child = monitor_simulator_logs(&simulator_udid);
                         let stdout = child.stdout.take().expect("Failed to capture stdout");
@@ -1411,6 +1437,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                             setup_ios_privacy_config(&simulator_udid, config_url);
                         }
 
+                        let step = std::time::Instant::now();
                         if !xcrun_command(&[
                                 "simctl",
                                 "launch",
@@ -1421,18 +1448,20 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                             ]).status.success() {
                             panic!("Failed to launch the app");
                         }
+                        info!("[TIMING] simctl launch: {:?}", step.elapsed());
 
                         // Wait for the server to start (check both IPv4 and IPv6)
                         info!("Waiting for automation server on port {} (iOS)...", port);
+                        let port_wait_start = std::time::Instant::now();
                         let mut port_attempts = 0;
                         loop {
                             if !port_is_available(port) {
-                                info!("Port {} is now in use after {} attempts", port, port_attempts);
+                                info!("[TIMING] port {} in use after {:?} ({} attempts)", port, port_wait_start.elapsed(), port_attempts);
                                 break;
                             }
                             port_attempts += 1;
                             if port_attempts > 120 {
-                                info!("Warning: Timeout waiting for port {} after 60 seconds, proceeding anyway", port);
+                                info!("[TIMING] port wait TIMEOUT after {:?} ({} attempts)", port_wait_start.elapsed(), port_attempts);
                                 break;
                             }
                             std::thread::sleep(std::time::Duration::from_millis(500));
@@ -1480,6 +1509,7 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
 
                         // Ensure a tab exists (iOS may not have one after launch)
                         info!("Checking for available tabs (iOS)...");
+                        let step = std::time::Instant::now();
                         let params = std::collections::HashMap::new();
                         let handles_response = make_server_request(port, "getWindowHandles", &params);
                         let has_tab = serde_json::from_str::<Vec<String>>(&handles_response)
@@ -1494,6 +1524,8 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                         } else {
                             info!("Tab already available (iOS)");
                         }
+                        info!("[TIMING] tab check/create: {:?}", step.elapsed());
+                        info!("[TIMING] iOS NewSession total: {:?}", session_start.elapsed());
 
                         let _ = child.kill();
                         let capabilities = Map::new();

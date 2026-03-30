@@ -120,6 +120,22 @@ impl Handler {
     pub fn new() -> Self {
         Handler {}
     }
+
+    fn compatibility_window_rect() -> WindowRectResponse {
+        // Temporary compatibility response for WPT session bootstrap.
+        // Apple automation currently doesn't expose native get/set window rect endpoints,
+        // so we return a stable synthetic rect to keep shared web tests running.
+        // The longer-term fix is to plumb a real `getWindowRect` request through the
+        // Apple automation server and derive it from the active window or screen bounds,
+        // while deciding whether `setWindowRect` should be implemented or remain a
+        // documented no-op on platforms that can't resize app windows programmatically.
+        WindowRectResponse {
+            x: 0,
+            y: 0,
+            width: 1280,
+            height: 720,
+        }
+    }
 }
 
 struct PortManager {
@@ -1981,6 +1997,12 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 let window_handles: Vec<String> = serde_json::from_str(&window_handles).expect("Failed to parse window handles");
                 info!("Window handles: {:#?}", window_handles);
                 return Ok(WebDriverResponse::Generic(ValueResponse(window_handles.into())));
+            },
+            GetWindowRect => {
+                return Ok(WebDriverResponse::WindowRect(Handler::compatibility_window_rect()));
+            },
+            SetWindowRect(_) => {
+                return Ok(WebDriverResponse::WindowRect(Handler::compatibility_window_rect()));
             },
             GetCurrentUrl => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");

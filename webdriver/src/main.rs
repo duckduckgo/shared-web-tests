@@ -8,6 +8,7 @@ extern crate serde_derive;
 extern crate serde_json;
 
 mod handler;
+mod platform;
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use anyhow::{bail, Result as ProgramResult};

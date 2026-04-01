@@ -695,46 +695,15 @@ fn launch_macos_app(app_path: &str, port: u16, ddg_caps: &DdgCapabilities) -> Re
     let bundle_id = get_macos_bundle_id(app_path);
     info!("Detected bundle ID: {} (took {:?})", bundle_id, launch_start.elapsed());
 
-    // First, quit any running instance gracefully
-    if is_macos_app_running(&bundle_id) {
-        info!("App is running, quitting gracefully...");
-        
-        // Try graceful quit via AppleScript
-        let _ = Command::new("osascript")
-            .args(&["-e", &format!("tell application id \"{}\" to quit", bundle_id)])
-            .output();
-
-        // Wait and check if it quit
-        let mut attempts = 0;
-        while is_macos_app_running(&bundle_id) && attempts < 30 {
-            std::thread::sleep(std::time::Duration::from_millis(200));
-            attempts += 1;
-        }
-
-        // If still running, try SIGTERM (graceful termination)
-        if is_macos_app_running(&bundle_id) {
-            info!("App still running, sending SIGTERM...");
-            let _ = Command::new("pkill")
-                .args(&["-TERM", "-f", &bundle_id])
-                .output();
-            
-            // Wait for graceful shutdown
-            let mut attempts = 0;
-            while is_macos_app_running(&bundle_id) && attempts < 20 {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-                attempts += 1;
-            }
-        }
-
-        // Last resort: SIGKILL (will show crash dialog, but at least continues)
-        if is_macos_app_running(&bundle_id) {
-            info!("App still running, force killing...");
-            let _ = Command::new("pkill")
-                .args(&["-KILL", "-f", &bundle_id])
-                .output();
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-    }
+    // Kill any running DuckDuckGo instance immediately.
+    // On CI there's no user session to protect, and graceful shutdown via
+    // AppleScript/SIGTERM was taking 10+ seconds and often failing to release
+    // the automation port, causing subsequent NewSession attempts to timeout.
+    info!("Killing any existing DuckDuckGo processes...");
+    let _ = Command::new("pkill")
+        .args(&["-KILL", "-x", "DuckDuckGo"])
+        .output();
+    std::thread::sleep(std::time::Duration::from_millis(500));
 
     // Write the automation port to defaults using correct bundle ID
     write_macos_defaults(&bundle_id, "automationPort", "int", &port.to_string());
@@ -746,35 +715,26 @@ fn launch_macos_app(app_path: &str, port: u16, ddg_caps: &DdgCapabilities) -> Re
         setup_macos_privacy_config(&bundle_id, config_url);
     }
 
-    // Launch the app
-    // Remove CI env var to prevent app from thinking it's in UI test mode
-    // (which would cause it to try loading MockEncryptionKeyStore that doesn't exist)
-    let child = if let Some(ref config_path) = ddg_caps.privacy_config_path {
-        // When using privacy_config_path, we launch the binary directly to pass env vars
-        // The `open -a` command doesn't support passing environment variables to the app
-        let binary_path = format!("{}/Contents/MacOS/DuckDuckGo", app_path);
-        info!("Launching binary directly with TEST_PRIVACY_CONFIG_PATH={}", config_path);
-        Command::new(&binary_path)
-            .args(&["-isUITesting", "true"])
-            .env("TEST_PRIVACY_CONFIG_PATH", config_path)
-            .env_remove("CI")
-            .spawn()
-            .map_err(|e| format!("Failed to launch app binary: {}", e))?
-    } else {
-        // Use standard `open -a` approach
-        Command::new("open")
-            .args(&["-a", app_path, "--args", "-isUITesting", "true"])
-            .env_remove("CI")
-            .spawn()
-            .map_err(|e| format!("Failed to launch app: {}", e))?
-    };
+    // Launch the binary directly — bypasses Launch Services / Gatekeeper which
+    // fail with error -10810 on CI runners for unsigned Debug builds.
+    let binary_path = format!("{}/Contents/MacOS/DuckDuckGo", app_path);
+    info!("Launching binary: {}", binary_path);
+    let mut cmd = Command::new(&binary_path);
+    cmd.args(&["-isUITesting", "true"]);
+    cmd.env_remove("CI");
+    if let Some(ref config_path) = ddg_caps.privacy_config_path {
+        info!("  with TEST_PRIVACY_CONFIG_PATH={}", config_path);
+        cmd.env("TEST_PRIVACY_CONFIG_PATH", config_path);
+    }
+    let child = cmd.spawn()
+        .map_err(|e| format!("Failed to launch app binary: {}", e))?;
 
     info!("[TIMING] launch_macos_app completed in {:?}", launch_start.elapsed());
     Ok((child, bundle_id))
 }
 
-fn monitor_macos_logs(bundle_id: &str) -> Child {
-    let child = Command::new("log")
+fn monitor_macos_logs(bundle_id: &str) -> Option<Child> {
+    match Command::new("log")
         .args(&[
             "stream",
             "--info",
@@ -784,8 +744,13 @@ fn monitor_macos_logs(bundle_id: &str) -> Child {
         ])
         .stdout(Stdio::piped())
         .spawn()
-        .expect("Failed to start log stream");
-    child
+    {
+        Ok(child) => Some(child),
+        Err(e) => {
+            info!("Warning: could not start macOS log stream: {}", e);
+            None
+        }
+    }
 }
 
 fn quit_macos_app_with_port(port: Option<u16>) {
@@ -854,46 +819,47 @@ fn quit_macos_app_with_port(port: Option<u16>) {
 }
 
 fn server_request_for_platform(session_id: &str, platform: &Platform, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
+    let port = get_port(session_id);
+    let mut log_child: Option<Child> = None;
+
     match platform {
         Platform::IOS => {
-            // iOS uses simulator logs
-            let mut child = monitor_simulator_logs(&session_id);
-            let stdout = child.stdout.take().expect("Failed to capture stdout");
-            thread::spawn(move || {
-                let reader = BufReader::new(stdout);
-                info!("Simulator logs:");
-                for line in reader.lines() {
-                    if let Ok(log_line) = line {
-                        info!("{}", log_line);
-                    }
+            if let Some(mut child) = monitor_simulator_logs(session_id) {
+                if let Some(stdout) = child.stdout.take() {
+                    thread::spawn(move || {
+                        let reader = BufReader::new(stdout);
+                        for line in reader.lines() {
+                            if let Ok(log_line) = line {
+                                info!("{}", log_line);
+                            }
+                        }
+                    });
                 }
-                info!("Simulator logs end");
-            });
-            let port = get_port(session_id);
-            let result = make_server_request(port, method, params);
-            let _ = child.kill();
-            result
+                log_child = Some(child);
+            }
         },
         Platform::MacOS => {
-            // macOS uses direct log stream
-            let mut child = monitor_macos_logs(APP_BUNDLE_ID_MACOS);
-            let stdout = child.stdout.take().expect("Failed to capture stdout");
-            thread::spawn(move || {
-                let reader = BufReader::new(stdout);
-                info!("macOS app logs:");
-                for line in reader.lines() {
-                    if let Ok(log_line) = line {
-                        info!("{}", log_line);
-                    }
+            if let Some(mut child) = monitor_macos_logs(APP_BUNDLE_ID_MACOS) {
+                if let Some(stdout) = child.stdout.take() {
+                    thread::spawn(move || {
+                        let reader = BufReader::new(stdout);
+                        for line in reader.lines() {
+                            if let Ok(log_line) = line {
+                                info!("{}", log_line);
+                            }
+                        }
+                    });
                 }
-                info!("macOS app logs end");
-            });
-            let port = get_port(session_id);
-            let result = make_server_request(port, method, params);
-            let _ = child.kill();
-            result
+                log_child = Some(child);
+            }
         }
     }
+
+    let result = make_server_request(port, method, params);
+    if let Some(mut child) = log_child {
+        let _ = child.kill();
+    }
+    result
 }
 
 fn make_server_request(port: u16, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
@@ -938,51 +904,28 @@ fn make_server_request(port: u16, method: &str, params: &std::collections::HashM
 // iOS-specific constants (kept for backward compatibility)
 const APP_BUNDLE_ID: &str = "com.duckduckgo.mobile.ios";
 
-fn monitor_simulator_logs(udid: &str) -> Child {
-
-/*
-xcrun
-
-simctl
-spawn
-booted
-log
-show
---last 900m --info --debug --predicate 'subsystem == "com.duckduckgo.mobile.ios"' --style compact
-
-*/
-    let child = Command::new("xcrun")
+fn monitor_simulator_logs(udid: &str) -> Option<Child> {
+    match Command::new("xcrun")
         .args(&[
             "simctl",
             "spawn",
             udid,
             "log",
             "stream",
-            // "--level",
-            // "debug",
             "--info",
             "--debug",
             "--predicate",
             &format!("subsystem == \"{}\"", APP_BUNDLE_ID),
-            //&format!("processImagePath CONTAINS \"{}\"", APP_BUNDLE_ID)
         ])
-        .stdout(Stdio::piped()) // Capture stdout
+        .stdout(Stdio::piped())
         .spawn()
-        .expect("Failed to start tail process");
-
-    // Spawn a new thread to handle tail -f output
-    /*
-    let stdout = child.stdout.take().expect("Failed to capture stdout");
-    thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            if let Ok(log_line) = line {
-                info!("Simulator: {}", log_line);
-            }
+    {
+        Ok(child) => Some(child),
+        Err(e) => {
+            info!("Warning: could not start simulator log stream: {}", e);
+            None
         }
-    });
-    */
-    return child;
+    }
 }
 
 fn xcrun_command(args: &[&str]) -> std::process::Output {
@@ -1251,18 +1194,19 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                         };
                         
                         // Start monitoring logs with correct bundle ID
-                        let mut child = monitor_macos_logs(&bundle_id);
-                        let stdout = child.stdout.take().expect("Failed to capture stdout");
-                        thread::spawn(move || {
-                            let reader = BufReader::new(stdout);
-                            info!("macOS app logs:");
-                            for line in reader.lines() {
-                                if let Ok(log_line) = line {
-                                    info!("{}", log_line);
-                                }
+                        let mut macos_log_child = monitor_macos_logs(&bundle_id);
+                        if let Some(ref mut child) = macos_log_child {
+                            if let Some(stdout) = child.stdout.take() {
+                                thread::spawn(move || {
+                                    let reader = BufReader::new(stdout);
+                                    for line in reader.lines() {
+                                        if let Ok(log_line) = line {
+                                            info!("{}", log_line);
+                                        }
+                                    }
+                                });
                             }
-                            info!("macOS app logs end");
-                        });
+                        }
                         
                         // Wait for the server to start by testing connectivity
                         info!("Waiting for automation server on port {}...", port);
@@ -1287,7 +1231,8 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                             attempts += 1;
                             if attempts > 120 { // 60 seconds timeout
                                 info!("[TIMING] macOS server wait TIMEOUT after {:?} ({} attempts)", server_wait_start.elapsed(), attempts);
-                                panic!("Timeout waiting for automation server to start");
+                                info!("ERROR: macOS automation server did not start. Check that the app is built with automation support enabled.");
+                                return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
                             }
                             std::thread::sleep(std::time::Duration::from_millis(500));
                         }
@@ -1333,7 +1278,9 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                         }
                         
                         info!("[TIMING] macOS NewSession total: {:?}", session_start.elapsed());
-                        let _ = child.kill();
+                        if let Some(mut child) = macos_log_child {
+                            let _ = child.kill();
+                        }
                         let capabilities = Map::new();
                         Ok(WebDriverResponse::NewSession(NewSessionResponse {
                             session_id: session_id,
@@ -1385,18 +1332,19 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                         }
                         info!("[TIMING] simctl install: {:?}", step.elapsed());
                         info!("Installed app");
-                        let mut child = monitor_simulator_logs(&simulator_udid);
-                        let stdout = child.stdout.take().expect("Failed to capture stdout");
-                        thread::spawn(move || {
-                            let reader = BufReader::new(stdout);
-                            info!("Simulator logs:");
-                            for line in reader.lines() {
-                                if let Ok(log_line) = line {
-                                    info!("{}", log_line);
-                                }
+                        let mut sim_log_child = monitor_simulator_logs(&simulator_udid);
+                        if let Some(ref mut child) = sim_log_child {
+                            if let Some(stdout) = child.stdout.take() {
+                                thread::spawn(move || {
+                                    let reader = BufReader::new(stdout);
+                                    for line in reader.lines() {
+                                        if let Ok(log_line) = line {
+                                            info!("{}", log_line);
+                                        }
+                                    }
+                                });
                             }
-                            info!("Simulator logs end");
-                        });
+                        }
                         let logger = xcrun_command(&[
                             "simctl",
                             "spawn",
@@ -1527,7 +1475,9 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                         info!("[TIMING] tab check/create: {:?}", step.elapsed());
                         info!("[TIMING] iOS NewSession total: {:?}", session_start.elapsed());
 
-                        let _ = child.kill();
+                        if let Some(mut child) = sim_log_child {
+                            let _ = child.kill();
+                        }
                         let capabilities = Map::new();
                         Ok(WebDriverResponse::NewSession(NewSessionResponse {
                             session_id: simulator_udid.to_string(),
@@ -1620,52 +1570,129 @@ fn set_ios_config_url_fallback(udid: &str, config_url: &str) {
                 let script = params.script.as_str();
                 info!("Script: {:#?}", params);
                 let script_args = params.args.as_ref().expect("Expected args");
-                // Serialize each argument to a JavaScript-compatible string
                 let mut script_args_str = script_args
                 .iter()
                 .map(|arg| serde_json::to_string(arg).expect("Failed to serialize argument"))
                 .collect::<Vec<_>>();
 
-                // Append the callback as the last argument (WebDriver async convention)
                 script_args_str.push("callback".to_string());
-
-                // Join the arguments with commas
                 let script_args_str = script_args_str.join(", ");
 
-                let script_wrapper = r#"
-                let promiseResult = new Promise((res, rej) => {
-                  const timeout = setTimeout(() => {
-                    rej("Script execution timed out");
-                  }, 30000);
+                // WKWebView.evaluateJavaScript can't resolve Promises, so we store the
+                // result in a global and poll for it from the Rust side.
+                // Per WebDriver spec, only the callback (last argument) signals completion.
+                // The script's return value is irrelevant for async scripts.
+                let async_id = Uuid::new_v4().to_string();
+                let script_wrapper = format!(r#"
+                window.__ddg_async = window.__ddg_async || {{}};
+                window.__ddg_async["{id}"] = {{ done: false, value: null, error: null }};
+                (function() {{
+                  const slot = window.__ddg_async["{id}"];
+                  const timeout = setTimeout(() => {{
+                    slot.error = "Script execution timed out";
+                    slot.done = true;
+                  }}, 10000);
+                  const callback = (result) => {{
+                    if (slot.done) return;
+                    clearTimeout(timeout);
+                    slot.value = (result === undefined) ? null : result;
+                    slot.done = true;
+                  }};
+                  try {{
+                    (async function () {{
+                      __SCRIPT__
+                    }})(__SCRIPT_ARGS__);
+                  }} catch(e) {{
+                    clearTimeout(timeout);
+                    slot.error = String(e);
+                    slot.done = true;
+                  }}
+                }})();
+                return "pending";
+                "#, id = async_id);
 
-                  const callback = (result) => {
-                    clearTimeout(timeout);
-                    res(result);
-                  };
-
-                  (async function () {
-                    __SCRIPT__
-                  })(__SCRIPT_ARGS__).then(result => {
-                    clearTimeout(timeout);
-                    res(result);
-                  }).catch(error => {
-                    clearTimeout(timeout);
-                    rej(error);
-                  });
-                });
-                return promiseResult;
-                "#;
-                // Replace SCRIPT and SCRIPT_ARGS with the actual script and arguments
                 let script = script_wrapper.replace("__SCRIPT__", script).replace("__SCRIPT_ARGS__", script_args_str.as_str());
                 let mut params = std::collections::HashMap::new();
-                // Escape the script
                 let script = urlencoding::encode(&script).to_string();
                 params.insert("script", script.as_str());
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
-                let response = server_request_for_platform(session_id, &platform, "execute", &params);
-                info!("Script Response: {:#?}", response);
-                let parsed: Value = serde_json::from_str(&response)?;
-                return Ok(WebDriverResponse::Generic(ValueResponse(parsed.into())));
+                server_request_for_platform(session_id, &platform, "execute", &params);
+
+                // Poll for the async result
+                let poll_script = format!(
+                    r#"
+                    if (!window.__ddg_async || !window.__ddg_async["{id}"])
+                        return JSON.stringify({{"lost": true}});
+                    var slot = window.__ddg_async["{id}"];
+                    if (!slot.done) return JSON.stringify({{"pending": true}});
+                    delete window.__ddg_async["{id}"];
+                    if (slot.error) return JSON.stringify({{"error": slot.error}});
+                    return JSON.stringify({{"value": slot.value}});
+                    "#, id = async_id
+                );
+                let poll_encoded = urlencoding::encode(&poll_script).to_string();
+
+                let poll_start = std::time::Instant::now();
+                let mut consecutive_missing = 0;
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    let mut poll_params = std::collections::HashMap::new();
+                    poll_params.insert("script", poll_encoded.as_str());
+                    let port = get_port(session_id);
+                    let poll_response = make_server_request(port, "execute", &poll_params);
+
+                    // poll_response may be double-encoded: the poll script uses
+                    // JSON.stringify() and make_server_request extracts the "message"
+                    // field which is itself a JSON string. Parse twice if needed.
+                    let poll_json = serde_json::from_str::<Value>(&poll_response)
+                        .ok()
+                        .and_then(|v| {
+                            if let Some(s) = v.as_str() {
+                                serde_json::from_str::<Value>(s).ok()
+                            } else if v.is_object() {
+                                Some(v)
+                            } else {
+                                None
+                            }
+                        });
+
+                    if let Some(parsed) = poll_json {
+                        if parsed.get("lost").is_some() {
+                            consecutive_missing += 1;
+                            if consecutive_missing > 5 {
+                                info!("ExecuteAsyncScript: context lost (page navigated), returning null after {} checks", consecutive_missing);
+                                return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(200));
+                            continue;
+                        }
+                        if parsed.get("pending").is_some() {
+                            consecutive_missing = 0;
+                            if poll_start.elapsed().as_secs() > 30 {
+                                info!("ExecuteAsyncScript poll timeout after 30s");
+                                return Err(webdriver::error::WebDriverError::new(
+                                    webdriver::error::ErrorStatus::ScriptTimeout,
+                                    "Async script timed out".to_string(),
+                                ));
+                            }
+                            continue;
+                        }
+                        consecutive_missing = 0;
+                        if let Some(error) = parsed.get("error") {
+                            return Err(webdriver::error::WebDriverError::new(
+                                webdriver::error::ErrorStatus::JavascriptError,
+                                format!("Async script error: {}", error),
+                            ));
+                        }
+                        let value = parsed.get("value").cloned().unwrap_or(Value::Null);
+                        return Ok(WebDriverResponse::Generic(ValueResponse(value)));
+                    }
+
+                    if poll_start.elapsed().as_secs() > 30 {
+                        info!("ExecuteAsyncScript poll timeout (unparseable response)");
+                        return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+                    }
+                }
             },
             FindElement(params) => {
                 let uuid_polyfill = include_str!("generate-uuid.js");

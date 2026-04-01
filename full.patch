@@ -89,7 +89,7 @@ diff -ruN web-platform-tests/tools/wptrunner/wptrunner/browsers/__init__.py buil
 diff -ruN web-platform-tests/tools/wptrunner/wptrunner/browsers/duckduckgo.py build/tools/wptrunner/wptrunner/browsers/duckduckgo.py
 --- web-platform-tests/tools/wptrunner/wptrunner/browsers/duckduckgo.py	1970-01-01 01:00:00
 +++ build/tools/wptrunner/wptrunner/browsers/duckduckgo.py	2024-12-20 09:18:39
-@@ -0,0 +1,56 @@
+@@ -0,0 +1,58 @@
 +# mypy: allow-untyped-defs
 +
 +from .base import (WebDriverBrowser,  # noqa: F401
@@ -144,6 +144,8 @@ diff -ruN web-platform-tests/tools/wptrunner/wptrunner/browsers/duckduckgo.py bu
 +
 +
 +class DuckDuckGoBrowser(WebDriverBrowser):
++    init_timeout: float = 120
++
 +    def make_command(self):
 +        return [self.webdriver_binary, "--port", str(self.port)] + self.webdriver_args
 diff -ruN web-platform-tests/tools/wptrunner/wptrunner/executors/executorwebdriver.py build/tools/wptrunner/wptrunner/executors/executorwebdriver.py

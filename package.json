@@ -81,7 +81,10 @@
         "build:macos-with-fix": "node scripts/build-macos-with-config-fix.mjs",
         "build:macos-with-fix:dry": "node scripts/build-macos-with-config-fix.mjs --dry-run",
         "build:macos-with-fix:config-only": "node scripts/build-macos-with-config-fix.mjs --skip-app-build",
-        "config:restore": "node scripts/build-macos-with-config-fix.mjs --restore"
+        "config:restore": "node scripts/build-macos-with-config-fix.mjs --restore",
+        "investigate:hover": "node scripts/investigate-hover-bug.mjs",
+        "investigate:hover:keep": "node scripts/investigate-hover-bug.mjs --keep",
+        "investigate:hover:screenshot": "node scripts/investigate-hover-bug.mjs --screenshot"
     },
     "type": "module",
     "author": "DuckDuckGo",

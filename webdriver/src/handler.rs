@@ -168,6 +168,11 @@ impl PortManager {
         }
         panic!("No available ports found");
     }
+
+    fn set_port(&self, udid: &str, port: u16) {
+        let mut ports = self.ports.lock().unwrap();
+        ports.insert(Box::leak(udid.to_string().into_boxed_str()), port);
+    }
 }
 
 fn port_is_available(port: u16) -> bool {
@@ -181,8 +186,39 @@ fn get_port(udid: &str) -> u16 {
     port_manager.get_port(udid)
 }
 
+fn store_port(udid: &str, port: u16) {
+    let port_manager = PORT_MANAGER.get_or_init(|| PortManager::new());
+    port_manager.set_port(udid, port);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetPlatform {
+    Ios,
+    Macos,
+}
+
+impl TargetPlatform {
+    fn current() -> Self {
+        match env::var("DDG_PLATFORM").ok().as_deref() {
+            Some("macos") => Self::Macos,
+            _ => Self::Ios,
+        }
+    }
+
+    fn app_bundle_id(self) -> &'static str {
+        match self {
+            Self::Ios => IOS_APP_BUNDLE_ID,
+            Self::Macos => MACOS_APP_BUNDLE_ID,
+        }
+    }
+}
+
 fn server_request(udid: &str, method: &str, params: &std::collections::HashMap<&str, &str>) -> String {
-    let mut child = monitor_simulator_logs(&udid);
+    let mut child = if TargetPlatform::current() == TargetPlatform::Ios {
+        Some(monitor_simulator_logs(&udid))
+    } else {
+        None
+    };
     let port = get_port(udid);
     let query_string: String = params.iter()
         .map(|(key, value)| format!("{}={}", key, value))
@@ -212,7 +248,9 @@ fn server_request(udid: &str, method: &str, params: &std::collections::HashMap<&
         message: String,
     }
     let json: Response = serde_json::from_str(&resp).expect("Failed to parse response");
-    let _ = child.kill();
+    if let Some(child) = child.as_mut() {
+        let _ = child.kill();
+    }
     return json.message;
 }
 
@@ -249,11 +287,11 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
         &("com.apple.CoreSimulator.SimRuntime.".to_owned() + target_os),
     ]);
 
-    let mut cargo_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let cargo_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let path_to_ca_cert = cargo_path.join("cacert.pem");
 
     // Install CA Key
-    let install_ca_key = xcrun_command(&[
+    let _install_ca_key = xcrun_command(&[
         "simctl",
         "keychain",
         &device_name,
@@ -271,7 +309,9 @@ fn find_or_create_simulator(target_device: &str, target_os: &str) -> Result<Stri
     Ok(new_udid.to_string())
 }
 
-const APP_BUNDLE_ID: &str = "com.duckduckgo.mobile.ios";
+const IOS_APP_BUNDLE_ID: &str = "com.duckduckgo.mobile.ios";
+const MACOS_APP_BUNDLE_ID: &str = "com.duckduckgo.macos.browser";
+
 fn log_level() -> String {
     match log::max_level() {
         log::LevelFilter::Error => "error",
@@ -293,7 +333,7 @@ fn monitor_simulator_logs(udid: &str) -> Child {
             "--level",
             &log_level(),
             "--predicate",
-            &format!("subsystem == \"{}\"", APP_BUNDLE_ID),
+            &format!("subsystem == \"{}\"", IOS_APP_BUNDLE_ID),
         ])
         .stdout(Stdio::piped()) // Capture stdout
         .spawn()
@@ -336,11 +376,42 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
         udid,
         "defaults",
         "write",
-        APP_BUNDLE_ID,
+        IOS_APP_BUNDLE_ID,
         key,
         &format!("-{key_type}"),
         value,
     ]);
+}
+
+fn write_macos_defaults(bundle_id: &str, key: &str, key_type: &str, value: &str) {
+    let _ = Command::new("defaults")
+        .args([
+            "write",
+            bundle_id,
+            key,
+            &format!("-{key_type}"),
+            value,
+        ])
+        .status();
+}
+
+fn derived_data_path() -> PathBuf {
+    if let Ok(env_path) = std::env::var("DERIVED_DATA_PATH") {
+        PathBuf::from(env_path)
+    } else {
+        let current_dir = std::env::current_dir().expect("Failed to get current directory");
+        current_dir.join("../DerivedData")
+    }
+}
+
+fn wait_for_server_start(port: u16) {
+    let started = std::time::Instant::now();
+    while port_is_available(port) {
+        if started.elapsed() > std::time::Duration::from_secs(30) {
+            panic!("Timed out waiting for automation server on port {}", port);
+        }
+        thread::sleep(std::time::Duration::from_millis(100));
+    }
 }
 
  impl WebDriverHandler<DuckDuckGoExtensionRoute> for Handler {
@@ -361,111 +432,163 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
             "iOS-18-2".to_string()
         };
 
+        let target_platform = TargetPlatform::current();
         info!("Message received {:?}", msg);
         return match msg.command {
             WebDriverCommand::NewSession(_) => {
-                info!("Starting automation... {:?} {:?}", target_device, target_os);
-                let simulator_udid = match find_or_create_simulator(&target_device, &target_os) {
-                    Ok(udid) => udid,
-                    Err(e) => {
-                        info!("Failed to find or create simulator: {}", e);
-                        return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+                info!("Starting automation for {:?}", target_platform);
+                match target_platform {
+                    TargetPlatform::Ios => {
+                        let simulator_udid = match find_or_create_simulator(&target_device, &target_os) {
+                            Ok(udid) => udid,
+                            Err(e) => {
+                                info!("Failed to find or create simulator: {}", e);
+                                return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+                            }
+                        };
+                        info!("Simulator UDID: {:?}", simulator_udid);
+
+                        xcrun_command(&["simctl", "boot", &simulator_udid]);
+
+                        Command::new("open")
+                            .args(&["-a", "Simulator"])
+                            .status()
+                            .expect("Failed to open the Simulator app");
+                        info!("Opened Simulator app");
+                        xcrun_command(&["simctl", "terminate", &simulator_udid, IOS_APP_BUNDLE_ID]);
+                        xcrun_command(&["simctl", "uninstall", &simulator_udid, IOS_APP_BUNDLE_ID]);
+                        info!("Uninstalled app");
+
+                        let derived_data_path = derived_data_path();
+                        let derived_data_path = derived_data_path.to_str().expect("Failed to convert path to string");
+                        let app_path = format!("{derived_data_path}/Build/Products/Debug-iphonesimulator/DuckDuckGo.app");
+                        info!("App Path: {:?}", app_path);
+                        if !xcrun_command(&["simctl", "install", &simulator_udid, app_path.as_str()]).status.success() {
+                            panic!("Failed to install the app");
+                        }
+                        info!("Installed app");
+                        let mut child = monitor_simulator_logs(&simulator_udid);
+                        let logger = xcrun_command(&[
+                            "simctl",
+                            "spawn",
+                            &simulator_udid,
+                            "log",
+                            "config",
+                            "--mode",
+                            &format!("level:{}", log_level()),
+                            "-subsystem",
+                            IOS_APP_BUNDLE_ID
+                        ]);
+                        if !logger.status.success() {
+                            panic!("Failed to set log level\n{}", String::from_utf8_lossy(&logger.stderr));
+                        }
+
+                        let persist_logs = xcrun_command(&[
+                            "simctl",
+                            "spawn",
+                            &simulator_udid,
+                            "log",
+                            "config",
+                            "--mode",
+                            &format!("persist:{}", log_level()),
+                            "-subsystem",
+                            IOS_APP_BUNDLE_ID
+                        ]);
+                        if !persist_logs.status.success() {
+                            panic!("Failed to perist log level\n{}", String::from_utf8_lossy(&persist_logs.stderr));
+                        }
+
+                        write_defaults(&simulator_udid, "isUITesting", "bool", "true");
+                        write_defaults(&simulator_udid, "isOnboardingCompleted", "string", "true");
+                        let port = get_port(&simulator_udid);
+                        write_defaults(&simulator_udid, "automationPort", "int", port.to_string().as_str());
+
+                        if !xcrun_command(&[
+                                "simctl",
+                                "launch",
+                                &simulator_udid,
+                                IOS_APP_BUNDLE_ID,
+                                "-ff.webExtensions",
+                                "true",
+                                "isUITesting",
+                                "true"
+                            ]).status.success() {
+                            panic!("Failed to launch the app");
+                        }
+
+                        wait_for_server_start(port);
+                        let _ = child.kill();
+                        let capabilities = Map::new();
+                        Ok(WebDriverResponse::NewSession(NewSessionResponse {
+                            session_id: simulator_udid.to_string(),
+                            capabilities: Value::Object(capabilities),
+                        }))
                     }
-                };
-                info!("Simulator UDID: {:?}", simulator_udid);
-            
-                // Boot the simulator (if it's not already booted)
-                xcrun_command(&["simctl", "boot", &simulator_udid]);
-            
-                // Launch the simulator app
-                Command::new("open")
-                    .args(&["-a", "Simulator"])
-                    .status()
-                    .expect("Failed to open the Simulator app");
-                info!("Opened Simulator app");
-                xcrun_command(&["simctl", "terminate", &simulator_udid, APP_BUNDLE_ID]);
-                xcrun_command(&["simctl", "uninstall", &simulator_udid, APP_BUNDLE_ID]);
-                info!("Uninstalled app");
-                // Install the app on the simulator
-                let derived_data_path = if let Ok(env_path) = std::env::var("DERIVED_DATA_PATH") {
-                    PathBuf::from(env_path)
-                } else {
-                    let current_dir = std::env::current_dir().expect("Failed to get current directory");
-                    current_dir.join("../DerivedData")
-                };
-                let derived_data_path = derived_data_path.to_str().expect("Failed to convert path to string");
-                let app_path = format!("{derived_data_path}/Build/Products/Debug-iphonesimulator/DuckDuckGo.app");
-                info!("App Path: {:?}", app_path);
-                if !xcrun_command(&["simctl", "install", &simulator_udid, app_path.as_str()]).status.success() {
-                    panic!("Failed to install the app");
-                }
-                info!("Installed app");
-                let mut child = monitor_simulator_logs(&simulator_udid);
-                let logger = xcrun_command(&[
-                    "simctl",
-                    "spawn",
-                    &simulator_udid,
-                    "log",
-                    "config",
-                    "--mode",
-                    &format!("level:{}", log_level()),
-                    "-subsystem",
-                    &APP_BUNDLE_ID
-                ]);
-                if !logger.status.success() {
-                    panic!("Failed to set log level\n{}", String::from_utf8_lossy(&logger.stderr));
-                }
+                    TargetPlatform::Macos => {
+                        let app_bundle_id = env::var("MACOS_APP_BUNDLE_ID")
+                            .unwrap_or_else(|_| target_platform.app_bundle_id().to_string());
+                        let build_configuration = env::var("MACOS_BUILD_CONFIGURATION")
+                            .unwrap_or_else(|_| "Release".to_string());
+                        let app_name = env::var("MACOS_APP_NAME")
+                            .unwrap_or_else(|_| "DuckDuckGo".to_string());
+                        let executable_name = env::var("MACOS_EXECUTABLE_NAME")
+                            .unwrap_or_else(|_| app_name.clone());
+                        let app_path = derived_data_path()
+                            .join("Build")
+                            .join("Products")
+                            .join(&build_configuration)
+                            .join(format!("{app_name}.app"));
+                        let executable_path = app_path.join("Contents").join("MacOS").join(&executable_name);
+                        if !executable_path.exists() {
+                            panic!("Failed to find macOS app executable at {:?}", executable_path);
+                        }
 
-                let persist_logs = xcrun_command(&[
-                    "simctl",
-                    "spawn",
-                    &simulator_udid,
-                    "log",
-                    "config",
-                    "--mode",
-                    &format!("persist:{}", log_level()),
-                    "-subsystem",
-                    &APP_BUNDLE_ID
-                ]);
-                if !persist_logs.status.success() {
-                    panic!("Failed to perist log level\n{}", String::from_utf8_lossy(&persist_logs.stderr));
-                }
+                        let _ = Command::new("osascript")
+                            .args([
+                                "-e",
+                                &format!("tell application id \"{}\" to quit", app_bundle_id),
+                            ])
+                            .status();
 
-                write_defaults(&simulator_udid, "isUITesting", "bool", "true");
-                write_defaults(&simulator_udid, "isOnboardingCompleted", "string", "true");
-                let port = get_port(&simulator_udid);
-                write_defaults(&simulator_udid, "automationPort", "int", port.to_string().as_str());
+                        write_macos_defaults(&app_bundle_id, "moveToApplicationsFolderAlertSuppress", "bool", "true");
+                        write_macos_defaults(&app_bundle_id, "onboarding.finished", "bool", "true");
 
-                if !xcrun_command(&[
-                        "simctl",
-                        "launch",
-                        &simulator_udid,
-                        APP_BUNDLE_ID,
-                        "isUITesting",
-                        "true"
-                    ]).status.success() {
-                    panic!("Failed to launch the app");
-                }
+                        let bootstrap_session_id = "__macos_bootstrap__";
+                        let port = get_port(bootstrap_session_id);
+                        let child = Command::new(&executable_path)
+                            .env("AUTOMATION_PORT", port.to_string())
+                            .env("automationPort", port.to_string())
+                            .env("FEATURE_FLAGS", "webExtensions=true")
+                            .env("UITEST_MODE", "1")
+                            .spawn()
+                            .expect("Failed to launch macOS app");
+                        let session_id = child.id().to_string();
+                        store_port(&session_id, port);
+                        wait_for_server_start(port);
 
-                // Wait for the server to start
-                loop {
-                    if !port_is_available(port) {
-                        break;
+                        let capabilities = Map::new();
+                        Ok(WebDriverResponse::NewSession(NewSessionResponse {
+                            session_id,
+                            capabilities: Value::Object(capabilities),
+                        }))
                     }
                 }
-
-                let _ = child.kill(); // Gracefully kill the child process
-                let capabilities = Map::new();
-                Ok(WebDriverResponse::NewSession(NewSessionResponse {
-                    session_id: simulator_udid.to_string(),
-                    capabilities: Value::Object(capabilities),
-                }))
             },
             DeleteSession => {
                 let session_id = msg.session_id.as_ref().expect("Expected a session id");
                 info!("Deleting session {:?}", session_id);
-                // Shutdown the simulator
-                xcrun_command(&["simctl", "shutdown", &session_id]);
+                match target_platform {
+                    TargetPlatform::Ios => {
+                        xcrun_command(&["simctl", "shutdown", &session_id]);
+                    }
+                    TargetPlatform::Macos => {
+                        if let Ok(pid) = session_id.parse::<u32>() {
+                            let _ = Command::new("kill")
+                                .args([pid.to_string()])
+                                .status();
+                        }
+                    }
+                }
                 Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)))
             },
             Get(params) => {
@@ -694,7 +817,7 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
         };
      }
  
-     fn teardown_session(&mut self, kind: SessionTeardownKind) {
+     fn teardown_session(&mut self, _kind: SessionTeardownKind) {
         println!("Tearing down session");
         info!("Tearing down session");
      }

@@ -15,7 +15,11 @@
     },
     "exclude": [
       "web-platform-tests",
-      "node_modules"
+      "build",
+      "build/**/*",
+      "node_modules",
+      "scripts/server.mjs",
+      "webdriver/src/find-element.js"
     ]
   }
   

@@ -4,7 +4,7 @@ use webdriver::server::{Session, WebDriverHandler};
 use webdriver::httpapi::WebDriverExtensionRoute;
 use webdriver::Parameters;
 use webdriver::command::{WebDriverCommand, WebDriverExtensionCommand, WebDriverMessage};
-use webdriver::error::WebDriverResult;
+use webdriver::error::{ErrorStatus, WebDriverError, WebDriverResult};
 use webdriver::server::SessionTeardownKind;
 use serde_json::{Map, Value};
 use webdriver::command::WebDriverCommand::{
@@ -40,7 +40,9 @@ use std::path::PathBuf;
 
  #[derive(Clone, PartialEq, Eq, Debug)]
  pub enum DuckDuckGoExtensionRoute {
-     GetContext
+     GetContext,
+     InstallWebExtension,
+     UninstallWebExtension,
  }
 
  impl WebDriverExtensionRoute for DuckDuckGoExtensionRoute {
@@ -48,13 +50,26 @@ use std::path::PathBuf;
 
     fn command(
         &self,
-        _params: &Parameters,
+        params: &Parameters,
         body_data: &Value,
     ) -> WebDriverResult<WebDriverCommand<DuckDuckGoExtensionCommand>> {
         use self::DuckDuckGoExtensionRoute::*;
 
         let command = match *self {
-            GetContext => DuckDuckGoExtensionCommand::GetContext
+            GetContext => DuckDuckGoExtensionCommand::GetContext,
+            InstallWebExtension => {
+                let install_parameters: WebExtensionInstallParameters = serde_json::from_value(body_data.clone())
+                    .map_err(|error| WebDriverError::new(ErrorStatus::InvalidArgument, error.to_string()))?;
+                DuckDuckGoExtensionCommand::InstallWebExtension(install_parameters)
+            }
+            UninstallWebExtension => {
+                let extension_identifier = params
+                    .get("extensionId")
+                    .ok_or_else(|| WebDriverError::new(ErrorStatus::InvalidArgument, "Missing extensionId parameter"))?;
+                DuckDuckGoExtensionCommand::UninstallWebExtension(AddonUninstallParameters {
+                    id: extension_identifier.to_string(),
+                })
+            }
         };
 
         Ok(WebDriverCommand::Extension(command))
@@ -84,11 +99,10 @@ impl WebDriverExtensionCommand for VoidWebDriverExtensionCommand {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct AddonPath {
-    pub path: String,
-    pub temporary: Option<bool>,
-    #[serde(rename = "allowPrivateBrowsing")]
-    pub allow_private_browsing: Option<bool>,
+pub struct WebExtensionInstallParameters {
+    pub r#type: String,
+    pub path: Option<String>,
+    pub value: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -98,14 +112,22 @@ pub struct AddonUninstallParameters {
 
 #[derive(Clone, Debug)]
 pub enum DuckDuckGoExtensionCommand {
-    GetContext
+    GetContext,
+    InstallWebExtension(WebExtensionInstallParameters),
+    UninstallWebExtension(AddonUninstallParameters),
 }
 
 impl WebDriverExtensionCommand for DuckDuckGoExtensionCommand {
     fn parameters_json(&self) -> Option<Value> {
         use self::DuckDuckGoExtensionCommand::*;
         match self {
-            GetContext => None
+            GetContext => None,
+            InstallWebExtension(parameters) => Some(
+                serde_json::to_value(parameters).expect("Failed to serialize install web extension parameters"),
+            ),
+            UninstallWebExtension(parameters) => Some(
+                serde_json::to_value(parameters).expect("Failed to serialize uninstall web extension parameters"),
+            ),
         }
     }
 }
@@ -533,6 +555,39 @@ fn write_defaults(udid: &str, key: &str, key_type: &str, value: &str) {
                 let parsed: Value = serde_json::from_str(&response)?;
                 return Ok(WebDriverResponse::Generic(ValueResponse(parsed.into())));
             },
+            Extension(command) => {
+                let session_id = msg.session_id.as_ref().expect("Expected a session id");
+                match command {
+                    DuckDuckGoExtensionCommand::GetContext => {
+                        return Ok(WebDriverResponse::Generic(ValueResponse(Value::Null)));
+                    }
+                    DuckDuckGoExtensionCommand::InstallWebExtension(parameters) => {
+                        let mut params = std::collections::HashMap::new();
+                        params.insert("type", parameters.r#type.as_str());
+
+                        let encoded_path = parameters.path.as_ref().map(|path| urlencoding::encode(path).to_string());
+                        let encoded_value = parameters.value.as_ref().map(|value| urlencoding::encode(value).to_string());
+
+                        if let Some(path) = encoded_path.as_ref() {
+                            params.insert("path", path.as_str());
+                        }
+                        if let Some(value) = encoded_value.as_ref() {
+                            params.insert("value", value.as_str());
+                        }
+
+                        let response = server_request(session_id, "installWebExtension", &params);
+                        let parsed: Value = serde_json::from_str(&response)?;
+                        return Ok(WebDriverResponse::Generic(ValueResponse(parsed.into())));
+                    }
+                    DuckDuckGoExtensionCommand::UninstallWebExtension(parameters) => {
+                        let mut params = std::collections::HashMap::new();
+                        params.insert("extensionId", parameters.id.as_str());
+                        let response = server_request(session_id, "uninstallWebExtension", &params);
+                        let parsed: Value = serde_json::from_str(&response)?;
+                        return Ok(WebDriverResponse::Generic(ValueResponse(parsed.into())));
+                    }
+                }
+            }
             FindElement(params) => {
                 // Read file
                 let script = include_str!("find-element.js");

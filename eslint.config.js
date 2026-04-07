@@ -8,6 +8,7 @@ export default tseslint.config(
         ignores: [
             'web-platform-tests',
             'build/**/*',
+            'webdriver/src/find-element.js',
         ],
     },
     ...ddgConfig,

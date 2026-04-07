@@ -11,8 +11,9 @@ mod handler;
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use anyhow::{bail, Result as ProgramResult};
+use http::Method;
 use url::{Host, Url};
-use crate::handler::{Handler};
+use crate::handler::{DuckDuckGoExtensionRoute, Handler};
 use std::process::ExitCode;
 use std::env;
 const EXIT_UNAVAILABLE: u8 = 69;
@@ -91,13 +92,25 @@ fn inner_main(port: u16) -> ProgramResult<()> {
     let origin = format!("http://localhost:{}", port);
     let allow_origins = vec![Url::parse(&origin).unwrap()];
     let handler = Handler::new();
+    let extension_routes = vec![
+        (
+            Method::POST,
+            "/session/{sessionId}/webextension",
+            DuckDuckGoExtensionRoute::InstallWebExtension,
+        ),
+        (
+            Method::DELETE,
+            "/session/{sessionId}/webextension/{extensionId}",
+            DuckDuckGoExtensionRoute::UninstallWebExtension,
+        ),
+    ];
     info!("Starting server on {}", address);
     let listening = webdriver::server::start(
         address,
         allow_hosts,
         allow_origins,
         handler,
-        vec![],
+        extension_routes,
     )?;
 
     info!("Listening on {}", listening.socket);
